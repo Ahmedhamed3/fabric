@@ -1,0 +1,21 @@
+# Node
+node_modules/
+npm-debug.log
+
+# Fabric generated
+*.block
+*.tx
+*.tar.gz
+wallet/
+data/
+ledgersData/
+fabric-ca/
+organizations/
+
+# Docker
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+

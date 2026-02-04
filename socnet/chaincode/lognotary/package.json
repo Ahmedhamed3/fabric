@@ -1,0 +1,10 @@
+{
+  "name": "lognotary-ccaas",
+  "version": "1.0.0",
+  "main": "server.js",
+  "license": "Apache-2.0",
+  "dependencies": {
+    "fabric-shim": "2.5.7",
+    "fabric-contract-api": "2.5.7"
+  }
+}
