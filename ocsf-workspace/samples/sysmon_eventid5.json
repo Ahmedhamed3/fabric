@@ -1,0 +1,13 @@
+[
+  {
+    "EventID": 5,
+    "UtcTime": "2024-05-01 09:15:22.123",
+    "Computer": "LAB-WIN10-01",
+    "User": "CONTOSO\\svc_app",
+    "EventData": {
+      "ProcessGuid": "{A1B2C3D4-1111-2222-3333-444455556666}",
+      "ProcessId": "4120",
+      "Image": "C:\\Program Files\\Contoso\\app.exe"
+    }
+  }
+]

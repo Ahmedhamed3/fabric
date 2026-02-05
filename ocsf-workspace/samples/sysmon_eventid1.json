@@ -1,0 +1,18 @@
+[
+  {
+    "EventID": 1,
+    "UtcTime": "2024-05-01 09:15:00.000",
+    "Computer": "LAB-WIN10-01",
+    "User": "CONTOSO\\svc_app",
+    "EventData": {
+      "ProcessGuid": "{A1B2C3D4-1111-2222-3333-444455556666}",
+      "ProcessId": "4110",
+      "Image": "C:\\Program Files\\Contoso\\app.exe",
+      "CommandLine": "\"C:\\Program Files\\Contoso\\app.exe\" --service",
+      "ParentProcessGuid": "{ABCDEF12-3333-4444-5555-666677778888}",
+      "ParentProcessId": "4000",
+      "ParentImage": "C:\\Windows\\System32\\services.exe",
+      "ParentCommandLine": "services.exe"
+    }
+  }
+]

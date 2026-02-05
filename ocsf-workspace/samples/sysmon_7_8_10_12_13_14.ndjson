@@ -1,0 +1,6 @@
+{"EventID":7,"UtcTime":"2024-06-01 08:15:30.000","Computer":"LAB-WIN10-10","EventData":{"ImageLoaded":"C:\\Windows\\System32\\kernel32.dll"}}
+{"EventID":8,"UtcTime":"2024-06-01 08:20:00.000","Computer":"LAB-WIN10-10","EventData":{"TargetProcessGuid":"{11111111-2222-3333-4444-555555555555}","TargetProcessId":"4321","TargetImage":"C:\\Windows\\System32\\lsass.exe","StartAddress":"0x00007FF6AABBCCDD","StartModule":"C:\\Windows\\System32\\kernel32.dll"}}
+{"EventID":10,"UtcTime":"2024-06-01 08:25:00.000","Computer":"LAB-WIN10-10","EventData":{"TargetProcessGuid":"{66666666-7777-8888-9999-AAAAAAAAAAAA}","TargetProcessId":"2211","TargetImage":"C:\\Windows\\System32\\lsass.exe","GrantedAccess":"0x1410"}}
+{"EventID":12,"UtcTime":"2024-06-01 08:30:00.000","Computer":"LAB-WIN10-10","EventData":{"EventType":"CreateKey","TargetObject":"HKLM\\Software\\Contoso"}}
+{"EventID":13,"UtcTime":"2024-06-01 08:35:00.000","Computer":"LAB-WIN10-10","EventData":{"TargetObject":"HKLM\\Software\\Contoso\\Setting","Details":"DWORD (0x00000001)"}}
+{"EventID":14,"UtcTime":"2024-06-01 08:40:00.000","Computer":"LAB-WIN10-10","EventData":{"EventType":"RenameValue","TargetObject":"HKLM\\Software\\Contoso\\Setting","NewName":"HKLM\\Software\\Contoso\\SettingRenamed"}}

@@ -1,0 +1,2 @@
+{"time":"2025-01-26T20:35:10Z","client_ip":"192.168.1.20","method":"POST","url":"https://evil.com/upload","status":302,"bytes_out":1024,"bytes_in":20480,"user_agent":"curl/7.81.0"}
+{"time":"2025-01-26T20:36:10Z","client_ip":"192.168.1.21","method":"GET","url":"http://updates.example.net/agent.msi","status":200,"bytes_out":0,"bytes_in":99999,"user_agent":"Mozilla/5.0"}

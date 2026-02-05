@@ -1,0 +1,1 @@
+[{"EventID": 4624, "TimeCreated": {"SystemTime": "2024-01-01T00:00:00Z"}, "EventData": {"TargetUserName": "alice", "LogonType": 2, "IpAddress": "10.0.0.5"}}]

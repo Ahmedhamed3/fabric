@@ -1,0 +1,5 @@
+{"EventID": 1, "UtcTime": "2024-01-01 00:00:00.000", "ProcessId": 1234, "EventData": {"Image": "C:\\Windows\\System32\\cmd.exe", "CommandLine": "cmd.exe /c whoami"}}
+{"ts": 1690000000, "uid": "C1", "id.orig_h": "10.0.0.1", "id.resp_h": "8.8.8.8", "proto": "udp", "query": "example.com", "rcode_name": "NOERROR", "answers": ["1.2.3.4"]}
+{"ts":1675000000.123,"id.orig_h":"192.168.1.10","id.resp_h":"93.184.216.34","method":"GET","host":"example.com","uri":"/malware.exe","status_code":200,"user_agent":"Mozilla/5.0","request_body_len":0,"response_body_len":123456}
+{"time":"2025-01-26T20:35:10Z","client_ip":"192.168.1.20","method":"POST","url":"https://evil.com/upload","status":302,"bytes_out":1024,"bytes_in":20480,"user_agent":"curl/7.81.0"}
+{"category":"SignInLogs","time":"2025-01-26T20:36:00Z","userPrincipalName":"user@contoso.com","userId":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee","appDisplayName":"OfficeHome","ipAddress":"197.36.12.55","clientAppUsed":"Browser","status":{"errorCode":0,"failureReason":""},"location":{"city":"Alexandria","countryOrRegion":"EG"},"conditionalAccessStatus":"success","mfaDetail":{"authMethod":"PhoneAppNotification","result":"success"}}

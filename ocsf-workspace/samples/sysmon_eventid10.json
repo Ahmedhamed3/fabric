@@ -1,0 +1,17 @@
+[
+  {
+    "EventID": 10,
+    "UtcTime": "2024-05-01 09:18:30.000",
+    "Computer": "LAB-WIN10-04",
+    "User": "CONTOSO\\analyst",
+    "EventData": {
+      "SourceProcessGuid": "{E1B2C3D4-1111-2222-3333-444455556666}",
+      "SourceProcessId": "7010",
+      "SourceImage": "C:\\Windows\\System32\\wmiprvse.exe",
+      "TargetProcessGuid": "{F1B2C3D4-1111-2222-3333-444455556666}",
+      "TargetProcessId": "7012",
+      "TargetImage": "C:\\Windows\\System32\\lsass.exe",
+      "GrantedAccess": "0x1410"
+    }
+  }
+]

@@ -1,0 +1,14 @@
+[
+  {
+    "EventID": 7,
+    "UtcTime": "2024-05-01 09:16:10.000",
+    "Computer": "LAB-WIN10-02",
+    "User": "CONTOSO\\jdoe",
+    "EventData": {
+      "ProcessGuid": "{B1B2C3D4-1111-2222-3333-444455556666}",
+      "ProcessId": "5200",
+      "Image": "C:\\Windows\\System32\\rundll32.exe",
+      "ImageLoaded": "C:\\Windows\\System32\\kernel32.dll"
+    }
+  }
+]

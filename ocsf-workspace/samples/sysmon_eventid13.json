@@ -1,0 +1,15 @@
+[
+  {
+    "EventID": 13,
+    "UtcTime": "2024-05-01 09:19:35.000",
+    "Computer": "LAB-WIN10-06",
+    "User": "CONTOSO\\admin",
+    "EventData": {
+      "ProcessGuid": "{21B2C3D4-1111-2222-3333-444455556666}",
+      "ProcessId": "8180",
+      "Image": "C:\\Windows\\System32\\reg.exe",
+      "TargetObject": "HKLM\\Software\\Contoso\\Setting",
+      "Details": "DWORD (0x00000001)"
+    }
+  }
+]

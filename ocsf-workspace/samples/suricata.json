@@ -1,0 +1,1 @@
+[{"event_type": "alert", "timestamp": "2024-01-01T00:00:00Z", "src_ip": "10.0.0.1", "src_port": 1234, "dest_ip": "10.0.0.2", "dest_port": 80, "proto": "TCP", "alert": {"signature": "Test Alert", "category": "Potentially Bad Traffic", "severity": 2}}]

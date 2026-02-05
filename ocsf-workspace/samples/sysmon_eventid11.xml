@@ -1,0 +1,22 @@
+<Event xmlns="http://schemas.microsoft.com/win/2004/08/events/event">
+  <System>
+    <Provider Name="Microsoft-Windows-Sysmon" />
+    <EventID>11</EventID>
+    <Level>4</Level>
+    <TimeCreated SystemTime="2024-01-02T03:06:05.678Z" />
+    <EventRecordID>125</EventRecordID>
+    <Channel>Microsoft-Windows-Sysmon/Operational</Channel>
+    <Computer>HOST-A</Computer>
+  </System>
+  <EventData>
+    <Data Name="UtcTime">2024-01-02 03:06:05.678</Data>
+    <Data Name="ProcessId">5555</Data>
+    <Data Name="ProcessGuid">{44444444-4444-4444-4444-444444444444}</Data>
+    <Data Name="Image">C:\Windows\System32\notepad.exe</Data>
+    <Data Name="CommandLine">notepad.exe C:\Temp\notes.txt</Data>
+    <Data Name="TargetFilename">C:\Temp\notes.txt</Data>
+    <Data Name="Hashes">SHA256=cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc,MD5=dddddddddddddddddddddddddddddddd</Data>
+    <Data Name="User">CONTOSO\jdoe</Data>
+    <Data Name="RuleName">FileCreateRule</Data>
+  </EventData>
+</Event>

@@ -1,0 +1,18 @@
+[
+  {
+    "EventID": 8,
+    "UtcTime": "2024-05-01 09:17:45.450",
+    "Computer": "LAB-WIN10-03",
+    "User": "CONTOSO\\operator",
+    "EventData": {
+      "SourceProcessGuid": "{C1B2C3D4-1111-2222-3333-444455556666}",
+      "SourceProcessId": "6012",
+      "SourceImage": "C:\\Tools\\injector.exe",
+      "TargetProcessGuid": "{D1B2C3D4-1111-2222-3333-444455556666}",
+      "TargetProcessId": "6120",
+      "TargetImage": "C:\\Windows\\System32\\lsass.exe",
+      "StartAddress": "0x00007FF6AABBCCDD",
+      "StartModule": "C:\\Windows\\System32\\kernel32.dll"
+    }
+  }
+]

@@ -1,0 +1,2 @@
+{"ts":1675000000.123,"id.orig_h":"192.168.1.10","id.resp_h":"93.184.216.34","method":"GET","host":"example.com","uri":"/malware.exe","status_code":200,"user_agent":"Mozilla/5.0","request_body_len":0,"response_body_len":123456}
+{"ts":1675000001.500,"id.orig_h":"192.168.1.10","id.resp_h":"93.184.216.34","method":"POST","host":"example.com","uri":"/upload","status_code":404,"user_agent":"curl/7.81.0","request_body_len":512,"response_body_len":12}

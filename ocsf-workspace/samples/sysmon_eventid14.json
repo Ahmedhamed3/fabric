@@ -1,0 +1,16 @@
+[
+  {
+    "EventID": 14,
+    "UtcTime": "2024-05-01 09:20:00.000",
+    "Computer": "LAB-WIN10-07",
+    "User": "CONTOSO\\admin",
+    "EventData": {
+      "ProcessGuid": "{31B2C3D4-1111-2222-3333-444455556666}",
+      "ProcessId": "8280",
+      "Image": "C:\\Windows\\System32\\reg.exe",
+      "EventType": "RenameKey",
+      "TargetObject": "HKLM\\Software\\Contoso",
+      "NewName": "HKLM\\Software\\ContosoRenamed"
+    }
+  }
+]

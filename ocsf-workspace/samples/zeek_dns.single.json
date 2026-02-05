@@ -1,0 +1,1 @@
+{"ts": 1690000000, "uid": "C1", "id.orig_h": "10.0.0.1", "id.resp_h": "8.8.8.8", "proto": "udp", "query": "example.com", "rcode_name": "NOERROR", "answers": ["1.2.3.4"]}

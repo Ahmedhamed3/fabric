@@ -1,0 +1,16 @@
+[
+  {
+    "EventID": 11,
+    "UtcTime": "2024-03-04 05:06:07.890",
+    "Computer": "LAB-WIN10-01",
+    "User": "CONTOSO\\writer",
+    "EventData": {
+      "ProcessGuid": "{11111111-2222-3333-4444-555555555555}",
+      "ProcessId": "5480",
+      "Image": "C:\\Windows\\System32\\notepad.exe",
+      "CommandLine": "notepad.exe C:\\Temp\\created.txt",
+      "TargetFilename": "C:\\Temp\\created.txt",
+      "Hashes": "SHA256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa,MD5=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    }
+  }
+]

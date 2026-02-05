@@ -1,0 +1,4 @@
+{"EventID":1,"UtcTime":"2024-01-01 00:00:00.000","Computer":"host1","User":"user1","ProcessId":1234,"Image":"C:\\Windows\\System32\\cmd.exe","CommandLine":"cmd.exe /c whoami"}
+{"ts": 1690000000, "uid": "C1", "id.orig_h": "10.0.0.1", "id.resp_h": "8.8.8.8", "proto": "udp", "query": "example.com", "rcode_name": "NOERROR", "answers": ["1.2.3.4"]}
+{"bad_json": true,
+{"foo": "bar", "timestamp": "2024-01-01T00:00:00Z"}
