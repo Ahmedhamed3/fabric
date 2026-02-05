@@ -30,10 +30,24 @@ need_cmd() {
 }
 
 ensure_hosts() {
-  # Keep cert hostnames resolvable inside WSL
-  if ! grep -q "peer0.org1.example.com" /etc/hosts; then
-    log "Adding Fabric hostnames to /etc/hosts (requires sudo)"
-    sudo bash -c 'echo "127.0.0.1 orderer.example.com peer0.org1.example.com peer0.org2.example.com" >> /etc/hosts'
+  # Keep cert hostnames resolvable; only required for WSL-based local Docker usage.
+  if ! grep -qi microsoft /proc/version 2>/dev/null; then
+    return
+  fi
+
+  if grep -q "peer0.org1.example.com" /etc/hosts; then
+    return
+  fi
+
+  log "WSL detected. Adding Fabric hostnames to /etc/hosts"
+  local host_line="127.0.0.1 orderer.example.com peer0.org1.example.com peer0.org2.example.com"
+
+  if [[ -w /etc/hosts ]]; then
+    echo "$host_line" >> /etc/hosts
+  elif command -v sudo >/dev/null 2>&1; then
+    sudo bash -c "echo '$host_line' >> /etc/hosts"
+  else
+    echo "WARN: unable to update /etc/hosts automatically (no write permission and no sudo)."
   fi
 }
 
