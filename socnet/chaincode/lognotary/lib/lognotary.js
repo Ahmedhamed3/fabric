@@ -9,6 +9,7 @@ class LogNotaryChaincode extends shim.ChaincodeInterface {
 
   async Invoke(stub) {
     const { fcn, params } = stub.getFunctionAndParameters();
+    console.log(`Invoke called: fcn=${fcn}, paramsLength=${params.length}`);
 
     switch (fcn) {
       case 'PutLog':
