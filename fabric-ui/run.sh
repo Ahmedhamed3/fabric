@@ -1,8 +1,20 @@
 #!/usr/bin/env bash
-set -euo pipefail
+
+if [ -z "${BASH_VERSION:-}" ]; then
+  echo "[fabric-ui] ERROR: this script must be run with bash (e.g. ./fabric-ui/run.sh)." >&2
+  exit 1
+fi
+if [ "${BASH_VERSINFO[0]:-0}" -lt 4 ]; then
+  echo "[fabric-ui] ERROR: bash 4+ is required. Detected: ${BASH_VERSION}." >&2
+  exit 1
+fi
+
+set -eu
+set -o pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SOCNET_DIR="${SOCNET_DIR:-/opt/fabric-dev/socnet}"
+REPO_ROOT="$(cd "$ROOT_DIR/.." && pwd)"
+SOCNET_DIR="${SOCNET_DIR:-$REPO_ROOT/socnet}"
 START_SCRIPT="${START_SCRIPT:-$SOCNET_DIR/start_socnet.sh}"
 
 ensure_wsl_hosts() {
@@ -11,27 +23,36 @@ ensure_wsl_hosts() {
   fi
 
   if grep -q "peer0.org1.example.com" /etc/hosts; then
+    echo "[fabric-ui] Step 1/4: WSL hosts already configured"
     return
   fi
 
-  echo "[fabric-ui] WSL detected; adding Fabric hostnames to /etc/hosts"
-  local line="127.0.0.1 orderer.example.com peer0.org1.example.com peer0.org2.example.com"
+  echo "[fabric-ui] Step 1/4: WSL detected, adding Fabric hostnames to /etc/hosts"
+  local host_line="127.0.0.1 orderer.example.com peer0.org1.example.com peer0.org2.example.com"
+
   if [ -w /etc/hosts ]; then
-    echo "$line" >> /etc/hosts
+    echo "$host_line" >> /etc/hosts
   elif command -v sudo >/dev/null 2>&1; then
-    sudo bash -c "echo '$line' >> /etc/hosts"
+    sudo bash -c "echo '$host_line' >> /etc/hosts"
   else
-    echo "[fabric-ui] warning: unable to update /etc/hosts without sudo"
+    echo "[fabric-ui] ERROR: cannot update /etc/hosts (no write permission and no sudo)." >&2
+    exit 1
   fi
 }
 
-echo "[fabric-ui] Starting Fabric network and CCaaS"
+if [ ! -x "$START_SCRIPT" ]; then
+  echo "[fabric-ui] ERROR: start script not found or not executable: $START_SCRIPT" >&2
+  exit 1
+fi
+
 ensure_wsl_hosts
+
+echo "[fabric-ui] Step 2/4: starting Fabric network + CCaaS"
 bash "$START_SCRIPT" up
 
-echo "[fabric-ui] Installing dependencies"
+echo "[fabric-ui] Step 3/4: installing/updating UI dependencies"
 cd "$ROOT_DIR"
 npm install
 
-echo "[fabric-ui] Starting backend + frontend"
+echo "[fabric-ui] Step 4/4: starting Fabric UI backend + frontend"
 npm run dev
