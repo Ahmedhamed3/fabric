@@ -215,51 +215,73 @@ export function App() {
         {error && <div className="error">{error}</div>}
 
         {nav === 'overview' && (
-          <>
-            <section className="grid cards">
+          <section className="overview-layout">
+            <div className="overview-main">
+              <section className="grid cards">
               <Card title="Peers" value={`${overview?.summary.peersUp}/${overview?.summary.peersUp + overview?.summary.peersDown} up`} />
               <Card title="Orderer" value={`${overview?.summary.ordererUp}/${overview?.summary.ordererUp + overview?.summary.ordererDown} up`} />
               <Card title="Channels" value={String(overview?.summary.channelsCount)} />
               <Card title="Chaincodes" value={String(overview?.summary.chaincodesCount)} />
               <Card title="CCaaS Reachable" value={overview?.summary.ccaaSReachable ? 'YES' : 'NO'} />
               <Card title="Peer Heights" value={blockSummary} />
-            </section>
+              </section>
 
-            <section className="grid two-col">
-              <Panel title="Organizations">
+              <section className="grid two-col">
+                <Panel title="Organizations">
+                  <table>
+                    <thead><tr><th>Org</th><th>MSP ID</th><th>Peers</th><th>Status</th></tr></thead>
+                    <tbody>
+                      {overview?.organizations?.map((org: any) => (
+                        <tr key={org.name}><td>{org.name}</td><td>{org.mspId}</td><td>{org.peers.join(', ')}</td><td><span className={statusClass(org.status)}>{org.status}</span></td></tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </Panel>
+
+                <Panel title="Chaincode · lognotary">
+                  <ul className="kv">
+                    <li><b>Name</b><span>{overview?.chaincode?.name}</span></li>
+                    <li><b>Version</b><span>{overview?.chaincode?.version ?? '-'}</span></li>
+                    <li><b>Sequence</b><span>{overview?.chaincode?.sequence ?? '-'}</span></li>
+                    <li><b>Package ID</b><span>{overview?.chaincode?.packageId ?? '-'}</span></li>
+                    <li><b>Endpoint</b><span>{overview?.chaincode?.endpoint}</span></li>
+                    <li><b>Ready</b><span className={overview?.chaincode?.readyForEndorsements ? 'ok' : 'bad'}>{overview?.chaincode?.readyForEndorsements ? 'TRUE' : 'FALSE'}</span></li>
+                  </ul>
+                </Panel>
+              </section>
+
+              <Panel title="Services">
                 <table>
-                  <thead><tr><th>Org</th><th>MSP ID</th><th>Peers</th><th>Status</th></tr></thead>
+                  <thead><tr><th>Name</th><th>Status</th><th>Uptime</th><th>Network</th><th>Ports</th><th>IP</th></tr></thead>
                   <tbody>
-                    {overview?.organizations?.map((org: any) => (
-                      <tr key={org.name}><td>{org.name}</td><td>{org.mspId}</td><td>{org.peers.join(', ')}</td><td><span className={statusClass(org.status)}>{org.status}</span></td></tr>
+                    {overview?.services?.map((svc: any) => (
+                      <tr key={svc.name}><td>{svc.name}</td><td>{svc.status}</td><td>{svc.uptime}</td><td>{svc.network}</td><td>{svc.ports || '-'}</td><td>{svc.ip}</td></tr>
                     ))}
                   </tbody>
                 </table>
               </Panel>
+            </div>
 
-              <Panel title="Chaincode · lognotary">
-                <ul className="kv">
-                  <li><b>Name</b><span>{overview?.chaincode?.name}</span></li>
-                  <li><b>Version</b><span>{overview?.chaincode?.version ?? '-'}</span></li>
-                  <li><b>Sequence</b><span>{overview?.chaincode?.sequence ?? '-'}</span></li>
-                  <li><b>Package ID</b><span>{overview?.chaincode?.packageId ?? '-'}</span></li>
-                  <li><b>Endpoint</b><span>{overview?.chaincode?.endpoint}</span></li>
-                  <li><b>Ready</b><span className={overview?.chaincode?.readyForEndorsements ? 'ok' : 'bad'}>{overview?.chaincode?.readyForEndorsements ? 'TRUE' : 'FALSE'}</span></li>
+            <aside className="overview-rail">
+              <Panel title="Latest Events">
+                <ul className="feed">
+                  {(overview?.latestEvents || []).map((evt: any, idx: number) => (
+                    <li key={idx}><span>{new Date(evt.timestamp).toLocaleTimeString()}</span> <b>{evt.type}</b> {evt.message}</li>
+                  ))}
                 </ul>
               </Panel>
-            </section>
-
-            <Panel title="Services">
-              <table>
-                <thead><tr><th>Name</th><th>Status</th><th>Uptime</th><th>Network</th><th>Ports</th><th>IP</th></tr></thead>
-                <tbody>
-                  {overview?.services?.map((svc: any) => (
-                    <tr key={svc.name}><td>{svc.name}</td><td>{svc.status}</td><td>{svc.uptime}</td><td>{svc.network}</td><td>{svc.ports || '-'}</td><td>{svc.ip}</td></tr>
-                  ))}
-                </tbody>
-              </table>
-            </Panel>
-          </>
+              <Panel title="Admin Actions (Guarded)">
+                <div className="admin">
+                  <input value={adminPass} onChange={(e) => setAdminPass(e.target.value)} type="password" placeholder="Admin password" />
+                  <select value={selectedService} onChange={(e) => setSelectedService(e.target.value)}>
+                    {overview?.services?.map((svc: any) => <option key={svc.name}>{svc.name}</option>)}
+                  </select>
+                  <div className="row"><button onClick={fetchLogs}>View logs (tail 200)</button><button onClick={restart}>Restart service</button></div>
+                  <pre>{logs || 'No logs loaded.'}</pre>
+                </div>
+              </Panel>
+            </aside>
+          </section>
         )}
 
         {nav === 'explorer-blocks' && (
@@ -384,25 +406,6 @@ export function App() {
           </Panel>
         )}
 
-        <section className="grid two-col">
-          <Panel title="Latest Events">
-            <ul className="feed">
-              {(overview?.latestEvents || []).map((evt: any, idx: number) => (
-                <li key={idx}><span>{new Date(evt.timestamp).toLocaleTimeString()}</span> <b>{evt.type}</b> {evt.message}</li>
-              ))}
-            </ul>
-          </Panel>
-          <Panel title="Admin Actions (Guarded)">
-            <div className="admin">
-              <input value={adminPass} onChange={(e) => setAdminPass(e.target.value)} type="password" placeholder="Admin password" />
-              <select value={selectedService} onChange={(e) => setSelectedService(e.target.value)}>
-                {overview?.services?.map((svc: any) => <option key={svc.name}>{svc.name}</option>)}
-              </select>
-              <div className="row"><button onClick={fetchLogs}>View logs (tail 200)</button><button onClick={restart}>Restart service</button></div>
-              <pre>{logs || 'No logs loaded.'}</pre>
-            </div>
-          </Panel>
-        </section>
       </main>
     </div>
   );
