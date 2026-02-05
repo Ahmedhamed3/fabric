@@ -1,0 +1,30 @@
+services:
+  fabric-ui-backend:
+    image: node:20-bullseye
+    working_dir: /app
+    command: bash -lc "npm install && npm run dev -w backend"
+    environment:
+      PORT: 4000
+      FRONTEND_ORIGIN: http://localhost:5173
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-changeme}
+      SOCNET_DIR: /opt/fabric-dev/socnet
+      START_SCRIPT: /opt/fabric-dev/socnet/start_socnet.sh
+    ports:
+      - "4000:4000"
+    volumes:
+      - ./fabric-ui:/app
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /opt/fabric-dev/socnet:/opt/fabric-dev/socnet
+
+  fabric-ui-frontend:
+    image: node:20-bullseye
+    working_dir: /app
+    command: bash -lc "npm install && npm run dev -w frontend -- --host 0.0.0.0"
+    environment:
+      VITE_API_URL: http://localhost:4000
+    ports:
+      - "5173:5173"
+    depends_on:
+      - fabric-ui-backend
+    volumes:
+      - ./fabric-ui:/app
