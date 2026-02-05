@@ -578,6 +578,10 @@ SYS_MON_OCSF_TEMPLATE = Template(
         font-size: 12px;
         color: #52606d;
       }
+      .commit-button[disabled] {
+        cursor: not-allowed;
+        opacity: 0.6;
+      }
     </style>
   </head>
   <body>
@@ -589,6 +593,7 @@ SYS_MON_OCSF_TEMPLATE = Template(
           <input id="limitInput" type="number" min="1" max="200" value="$limit" />
         </label>
         <button id="refreshButton">Refresh</button>
+        <button id="commitButton" class="commit-button" disabled>Commit to Fabric</button>
         <span class="status" id="statusLabel"></span>
       </div>
     </div>
@@ -615,6 +620,15 @@ SYS_MON_OCSF_TEMPLATE = Template(
       const statusLabel = document.getElementById("statusLabel");
       const limitInput = document.getElementById("limitInput");
       const refreshButton = document.getElementById("refreshButton");
+      const commitButton = document.getElementById("commitButton");
+      const evidenceApiBase = "http://127.0.0.1:4100";
+      const selectedEventState = {
+        source: null,
+        original: null,
+        rawEnvelope: null,
+        ocsf: null,
+        report: null,
+      };
 
       function formatJson(value) {
         if (!value) {
@@ -764,6 +778,10 @@ PIPELINE_UI_TEMPLATE = Template(
         font-size: 12px;
         color: #52606d;
       }
+      .commit-button[disabled] {
+        cursor: not-allowed;
+        opacity: 0.6;
+      }
       @media (max-width: 768px) {
         .panel-grid {
           grid-template-columns: 1fr;
@@ -788,6 +806,7 @@ PIPELINE_UI_TEMPLATE = Template(
           <input id="limitInput" type="number" min="1" max="200" value="$limit" />
         </label>
         <button id="refreshButton">Refresh</button>
+        <button id="commitButton" class="commit-button" disabled>Commit to Fabric</button>
         <span class="status" id="statusLabel"></span>
       </div>
     </div>
@@ -820,6 +839,15 @@ PIPELINE_UI_TEMPLATE = Template(
       const statusLabel = document.getElementById("statusLabel");
       const limitInput = document.getElementById("limitInput");
       const refreshButton = document.getElementById("refreshButton");
+      const commitButton = document.getElementById("commitButton");
+      const evidenceApiBase = "http://127.0.0.1:4100";
+      const selectedEventState = {
+        source: null,
+        original: null,
+        rawEnvelope: null,
+        ocsf: null,
+        report: null,
+      };
 
       function formatJson(value, fallback = "—") {
         if (value === null || value === undefined) {
@@ -836,6 +864,20 @@ PIPELINE_UI_TEMPLATE = Template(
         rawPanel.textContent = message;
         ocsfPanel.textContent = message;
         reportPanel.textContent = message;
+        selectedEventState.source = null;
+        selectedEventState.original = null;
+        selectedEventState.rawEnvelope = null;
+        selectedEventState.ocsf = null;
+        selectedEventState.report = null;
+        updateCommitButtonState();
+      }
+
+      function updateCommitButtonState() {
+        const evidenceCommit = selectedEventState.report?.evidence_commit;
+        const ready = Boolean(
+          evidenceCommit && selectedEventState.rawEnvelope && selectedEventState.ocsf && selectedEventState.original
+        );
+        commitButton.disabled = !ready;
       }
 
       async function loadEvents() {
@@ -904,9 +946,67 @@ PIPELINE_UI_TEMPLATE = Template(
           ocsfPanel.textContent = "No OCSF output.";
         }
         reportPanel.textContent = formatJson(payload.report, "Not available.");
+        selectedEventState.source = payload.source || source;
+        selectedEventState.original = payload.original;
+        selectedEventState.rawEnvelope = payload.raw_envelope;
+        selectedEventState.ocsf = payload.ocsf;
+        selectedEventState.report = payload.report;
+        updateCommitButtonState();
+      }
+
+      async function commitSelectedEvent() {
+        if (commitButton.disabled) {
+          return;
+        }
+        const evidenceCommit = selectedEventState.report?.evidence_commit;
+        if (!evidenceCommit) {
+          alert("evidence_commit is missing for this event.");
+          return;
+        }
+
+        commitButton.disabled = true;
+        const previousStatus = statusLabel.textContent;
+        statusLabel.textContent = "Committing to Fabric…";
+
+        try {
+          const response = await fetch(`${evidenceApiBase}/api/v1/evidence/commit`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              original_xml: typeof selectedEventState.original === "string"
+                ? selectedEventState.original
+                : JSON.stringify(selectedEventState.original),
+              raw_envelope: selectedEventState.rawEnvelope,
+              ocsf_event: selectedEventState.ocsf,
+              evidence_commit: evidenceCommit,
+            }),
+          });
+
+          const payload = await response.json().catch(() => ({}));
+          if (!response.ok) {
+            throw new Error(payload.detail || payload.error || `HTTP ${response.status}`);
+          }
+
+          statusLabel.textContent = "Commit succeeded.";
+          alert(
+            `Committed to Fabric
+Evidence ID: ${payload.evidence_id}
+Fabric TxID: ${payload.fabric_tx_id}
+Status: ${payload.status}`
+          );
+        } catch (error) {
+          statusLabel.textContent = "Commit failed.";
+          alert(`Commit to Fabric failed: ${error.message}`);
+        } finally {
+          updateCommitButtonState();
+          if (!statusLabel.textContent) {
+            statusLabel.textContent = previousStatus;
+          }
+        }
       }
 
       refreshButton.addEventListener("click", loadEvents);
+      commitButton.addEventListener("click", commitSelectedEvent);
       sourceSelect.addEventListener("change", loadEvents);
       limitInput.addEventListener("change", loadEvents);
       loadEvents();
