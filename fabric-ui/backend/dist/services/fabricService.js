@@ -14,6 +14,62 @@ export class FabricService {
         const full = `source ${envScript} && export PATH=/opt/fabric-dev/bin:$PATH && ${cmd}`;
         return runCommand('bash', ['-lc', full], timeout, config.socnetDir);
     }
+    decodeBlockFromPeerOutput(stdout) {
+        const trimmed = stdout.trim();
+        if (!trimmed)
+            return null;
+        const lines = trimmed.split('\n').map((line) => line.trim());
+        const jsonStartIdx = lines.findIndex((line) => line.startsWith('{'));
+        if (jsonStartIdx < 0)
+            return null;
+        const candidate = lines.slice(jsonStartIdx).join('\n');
+        try {
+            return JSON.parse(candidate);
+        }
+        catch {
+            return null;
+        }
+    }
+    getBlockTxSummaries(blockJson, blockNumber) {
+        const dataItems = blockJson?.data?.data ?? [];
+        return dataItems
+            .map((item) => {
+            const payload = item?.payload?.data;
+            const chHeader = payload?.header?.channel_header ?? {};
+            const actions = payload?.data?.actions ?? [];
+            const spec = actions?.[0]?.payload?.chaincode_proposal_payload?.input?.chaincode_spec ?? {};
+            const args = spec?.input?.args ?? [];
+            return {
+                txid: chHeader.tx_id ?? 'unknown',
+                chaincodeName: spec?.chaincode_id?.name ?? null,
+                functionName: args?.[0] ?? null,
+                timestamp: chHeader.timestamp ?? null,
+                validationCode: payload?.metadata?.[2] ?? null,
+                blockNumber
+            };
+        })
+            .filter((tx) => tx.txid !== 'unknown');
+    }
+    async fetchBlockJson(channel, number) {
+        const cmd = [
+            'tmp=$(mktemp)',
+            `peer channel fetch ${number} "$tmp" -c ${channel} -o localhost:7050 --tls --cafile "$ORDERER_CA" 2>/dev/null`,
+            'if [ $? -ne 0 ]; then rm -f "$tmp"; exit 2; fi',
+            'configtxlator proto_decode --input "$tmp" --type common.Block',
+            'rcode=$?',
+            'rm -f "$tmp"',
+            'exit $rcode'
+        ].join(' && ');
+        const out = await this.runPeerCmd(`${config.composeDir}/env_org1.sh`, cmd, 20000);
+        if (out.exitCode !== 0) {
+            return { block: null, warning: `Unable to fetch/decode block ${number}.` };
+        }
+        const parsed = this.decodeBlockFromPeerOutput(out.stdout);
+        if (!parsed) {
+            return { block: null, warning: `Unable to parse JSON for block ${number}.` };
+        }
+        return { block: parsed };
+    }
     async getContainers() {
         const out = await runCommand('docker', ['ps', '-a', '--format', '{{json .}}'], 12000);
         if (out.exitCode !== 0) {
@@ -92,6 +148,150 @@ export class FabricService {
             ccaaSReachable,
             readyForEndorsements: ccaaSReachable,
             errors
+        };
+    }
+    async getExplorerBlocks(channel, limit = 20, from) {
+        const warnings = [];
+        const heightRes = await this.runPeerCmd(`${config.composeDir}/env_org1.sh`, `peer channel getinfo -c ${channel}`, 15000);
+        const heightMatch = heightRes.stdout.match(/Block height:\s*(\d+)/i);
+        if (!heightMatch) {
+            return { channel, from: 0, limit, blocks: [], warnings: ['Unable to read channel height.'] };
+        }
+        const height = Number(heightMatch[1]);
+        const start = typeof from === 'number' ? from : Math.max(height - 1, 0);
+        const blocks = [];
+        for (let i = start; i >= 0 && blocks.length < limit; i -= 1) {
+            const fetched = await this.fetchBlockJson(channel, i);
+            if (fetched.warning) {
+                warnings.push(fetched.warning);
+                continue;
+            }
+            const block = fetched.block;
+            if (!block)
+                continue;
+            const txs = this.getBlockTxSummaries(block, i);
+            blocks.push({
+                number: i,
+                txCount: txs.length,
+                dataHash: block?.header?.data_hash ?? null,
+                previousHash: block?.header?.previous_hash ?? null,
+                channelId: block?.data?.data?.[0]?.payload?.header?.channel_header?.channel_id ?? channel
+            });
+        }
+        return { channel, from: start, limit, blocks, warnings };
+    }
+    async getExplorerBlockDetail(channel, number) {
+        const fetched = await this.fetchBlockJson(channel, number);
+        if (!fetched.block)
+            throw new Error(fetched.warning ?? `Block ${number} unavailable`);
+        const transactions = this.getBlockTxSummaries(fetched.block, number);
+        return {
+            number,
+            channel,
+            txCount: transactions.length,
+            header: {
+                dataHash: fetched.block?.header?.data_hash ?? null,
+                previousHash: fetched.block?.header?.previous_hash ?? null
+            },
+            transactions,
+            raw: fetched.block
+        };
+    }
+    async getTransactionDetail(channel, txid) {
+        const blocks = await this.getExplorerBlocks(channel, 120);
+        for (const block of blocks.blocks) {
+            const detail = await this.getExplorerBlockDetail(channel, block.number);
+            const tx = detail.transactions.find((item) => item.txid === txid);
+            if (tx) {
+                return {
+                    txid,
+                    blockNumber: block.number,
+                    timestamp: tx.timestamp,
+                    validationCode: tx.validationCode,
+                    creatorMspId: { value: null, reason: 'Creator MSP parsing is not available via current CLI decode path.' },
+                    chaincodeName: {
+                        value: tx.chaincodeName,
+                        reason: tx.chaincodeName ? undefined : 'Chaincode was not discoverable from decoded payload.'
+                    },
+                    functionName: {
+                        value: tx.functionName,
+                        reason: tx.functionName ? undefined : 'Function name was not discoverable from decoded payload.'
+                    },
+                    rwSetSummary: { value: null, reason: 'RW set decode not implemented yet.' },
+                    endorsements: { value: null, reason: 'Endorsement extraction is not available via current CLI decode path.' },
+                    raw: detail.raw
+                };
+            }
+        }
+        throw new Error(`Transaction ${txid} not found in recent block window.`);
+    }
+    async getChaincodeDefinition(channel, name) {
+        const cmd = `peer lifecycle chaincode querycommitted -C ${channel} -n ${name}`;
+        const out = await this.runPeerCmd(`${config.composeDir}/env_org1.sh`, cmd, 14000);
+        if (out.exitCode !== 0)
+            throw new Error('Unable to query committed chaincode definition.');
+        return {
+            channel,
+            name,
+            version: out.stdout.match(/Version:\s*([^,\n]+)/)?.[1]?.trim() ?? null,
+            sequence: out.stdout.match(/Sequence:\s*(\d+)/)?.[1] ?? null,
+            endorsementPolicy: out.stdout.match(/Endorsement Plugin:\s*([^,\n]+)/)?.[1]?.trim() ?? null,
+            initRequired: out.stdout.match(/Init required:\s*(\w+)/i)?.[1] ?? null,
+            collectionsConfig: out.stdout.match(/Collections:\s*([^\n]+)/)?.[1]?.trim() ?? null
+        };
+    }
+    async getChaincodeInvocations(channel, name, limit = 50) {
+        const warnings = [];
+        const blocks = await this.getExplorerBlocks(channel, 120);
+        const invocations = [];
+        for (const block of blocks.blocks) {
+            const detail = await this.getExplorerBlockDetail(channel, block.number);
+            for (const tx of detail.transactions) {
+                if (tx.chaincodeName === name) {
+                    invocations.push(tx);
+                }
+                if (invocations.length >= limit) {
+                    return { channel, name, limit, invocations, warnings: [...warnings, ...blocks.warnings] };
+                }
+            }
+        }
+        if (!invocations.length)
+            warnings.push('No matching invocations found in scanned block window.');
+        return { channel, name, limit, invocations, warnings: [...warnings, ...blocks.warnings] };
+    }
+    async exportBlockBundle(channel, number) {
+        const detail = await this.getExplorerBlockDetail(channel, number);
+        return {
+            type: 'block',
+            generatedAt: new Date().toISOString(),
+            channel,
+            payload: {
+                blockNumber: detail.number,
+                txCount: detail.txCount,
+                dataHash: detail.header.dataHash,
+                previousHash: detail.header.previousHash,
+                txids: detail.transactions.map((tx) => tx.txid),
+                timestamps: detail.transactions.map((tx) => tx.timestamp)
+            }
+        };
+    }
+    async exportTxBundle(channel, txid) {
+        const detail = await this.getTransactionDetail(channel, txid);
+        return {
+            type: 'transaction',
+            generatedAt: new Date().toISOString(),
+            channel,
+            payload: {
+                txid: detail.txid,
+                blockNumber: detail.blockNumber,
+                timestamp: detail.timestamp,
+                validationCode: detail.validationCode,
+                creatorMspId: detail.creatorMspId.value,
+                chaincodeName: detail.chaincodeName.value,
+                functionName: detail.functionName.value,
+                rwSetSummary: detail.rwSetSummary.value,
+                endorsements: detail.endorsements.value
+            }
         };
     }
     async getOverview() {

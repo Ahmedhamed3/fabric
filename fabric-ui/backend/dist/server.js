@@ -4,6 +4,7 @@ import { config } from './config.js';
 import { FabricService } from './services/fabricService.js';
 import { statusRoutes } from './routes/statusRoutes.js';
 import { adminRoutes } from './routes/adminRoutes.js';
+import { v1Routes } from './routes/v1Routes.js';
 const app = express();
 const service = new FabricService();
 app.use(cors({ origin: config.frontendOrigin }));
@@ -11,6 +12,7 @@ app.use(express.json());
 app.get('/health', (_req, res) => res.json({ ok: true }));
 app.use('/api/status', statusRoutes(service));
 app.use('/api/admin', adminRoutes(service));
+app.use('/api/v1', v1Routes(service));
 async function bootstrap() {
     console.log('[fabric-ui] Bootstrapping Fabric network via start_socnet.sh...');
     await service.ensureNetworkStarted();

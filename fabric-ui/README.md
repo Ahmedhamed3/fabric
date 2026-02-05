@@ -1,44 +1,83 @@
-# Fabric UI Console (Phase 1)
+# Fabric UI Console (Phase 1 + Phase 2)
 
-Cybersecurity-themed observability dashboard for the existing Fabric `socnet` network. Phase 1 scope is read-only status + guarded admin controls (logs/restart).
+Cybersecurity-themed observability and explorer dashboard for the existing Fabric `socnet` network.
 
-## What it does
+- **Phase 1 remains intact**: network overview + guarded admin controls (logs/restart).
+- **Phase 2 adds read-only Fabric Explorer**: blocks, transactions, search, chaincode views, and sanitized audit exports.
 
-- Auto-starts Fabric + CCaaS through `/opt/fabric-dev/socnet/start_socnet.sh up`.
-- Displays **Network Overview & Trust Foundation**:
-  - top status bar (network/channels/health/last refresh)
-  - summary cards (peers, orderer, channels, chaincode, CCaaS reachability, block heights)
-  - org table (Org1/Org2)
-  - services table (status/uptime/network/ports/IP)
-  - chaincode card (`lognotary` metadata)
-  - latest events feed (status transitions, CCaaS reachability changes, block height changes)
-- Admin endpoints are password-protected with `x-admin-password`.
-
-## Required structure
-
-```
-fabric-ui/
-  backend/
-  frontend/
-  docker-compose.ui.yml
-  run.sh
-```
-
-## One-command start options
-
-### Option A (recommended in WSL/local):
+## Run
 
 ```bash
 cd /workspace/fabric/fabric-ui
 ./run.sh
 ```
 
-### Option B (compose from root):
+This keeps the same startup flow as before: it boots socnet + CCaaS and starts backend/frontend.
 
-```bash
-cd /workspace/fabric
-ADMIN_PASSWORD=yourStrongPass docker compose -f fabric-ui/docker-compose.ui.yml up --build
-```
+## Phase 1 features (unchanged)
+
+- Auto-starts Fabric + CCaaS through `/opt/fabric-dev/socnet/start_socnet.sh up`.
+- Overview cards (peers/orderer/channels/chaincodes/CCaaS/block heights).
+- Organization and services tables.
+- Chaincode panel for `lognotary`.
+- Latest events feed.
+- Guarded admin actions (logs + restart) via `x-admin-password`.
+
+## Phase 2 features
+
+### UI sections
+
+Left navigation with:
+
+- **Overview**
+- **Explorer**
+  - Blocks
+  - Transactions
+  - Search
+- **Chaincode**
+  - Definition
+  - Invocations
+- **Audit**
+  - Exports
+
+### Explorer capabilities
+
+- Blocks Explorer with filter + loading/empty/error states.
+- Transaction detail viewer (forensic layout):
+  - Summary (txid, block number, timestamp, validation)
+  - Endorsements/creator org (best-effort)
+  - Chaincode/function (best-effort)
+  - RW set summary (best-effort)
+  - Collapsible raw JSON panel
+- Search by block number or txid.
+- Copy helpers (txid, block hash, export bundle).
+
+### Chaincode + audit
+
+- Chaincode committed definition for `lognotary` on `soclogs`.
+- Recent invocation history (best-effort scan window).
+- Verification bundle export endpoints for blocks and tx.
+
+## API endpoints
+
+Existing endpoints are unchanged:
+
+- `GET /api/status/overview`
+- `GET /api/status/containers`
+- `GET /api/status/chaincode`
+- `GET /api/status/channels`
+- `POST /api/admin/restart`
+- `GET /api/admin/logs?service=...&tail=...`
+
+New Phase 2 read-only endpoints under `/api/v1`:
+
+- `GET /api/v1/explorer/blocks?channel=soclogs&limit=20&from=<optional>`
+- `GET /api/v1/explorer/blocks/:number?channel=soclogs`
+- `GET /api/v1/explorer/tx/:txid?channel=soclogs`
+- `GET /api/v1/chaincode/definition?channel=soclogs&name=lognotary`
+- `GET /api/v1/chaincode/invocations?channel=soclogs&name=lognotary&limit=50`
+- `GET /api/v1/audit/export/block/:number?channel=soclogs`
+- `GET /api/v1/audit/export/tx/:txid?channel=soclogs`
 
 ## Environment variables
 
@@ -52,68 +91,29 @@ Backend (`fabric-ui/backend`):
 - `START_SCRIPT` (default `/opt/fabric-dev/socnet/start_socnet.sh`)
 - `CHANNEL_NAME` (default `soclogs`)
 
-## API endpoints
+## Troubleshooting / data availability notes
 
-- `GET /api/status/overview`
-- `GET /api/status/containers`
-- `GET /api/status/chaincode`
-- `GET /api/status/channels`
-- `POST /api/admin/restart` body: `{ "service": "lognotary-ccaas" }`
-- `GET /api/admin/logs?service=lognotary-ccaas&tail=200`
+- Some transaction-level fields are **best-effort** via CLI decode.
+- If chaincode function, creator MSP, endorsements, or RW set are unavailable, API returns `null` with a reason.
+- RWSet decode is intentionally not faked when unavailable.
+- Exports are sanitized (no certificate PEM dumps, no payload argument dumps).
 
-Admin calls must include header:
+## Manual test steps
 
-```
-x-admin-password: <ADMIN_PASSWORD>
-```
+1. Start UI with `./run.sh`.
+2. Verify overview still refreshes and admin log/restart endpoints work.
+3. Open Explorer → Blocks and load recent blocks.
+4. Open a block, then open transaction forensic view.
+5. Search by txid and by block number.
+6. Open Chaincode → Definition + Invocations.
+7. Export block bundle and tx bundle from Audit section.
 
-## Verify after startup
+## Quick checks
 
 ```bash
 curl -s http://localhost:4000/health
 curl -s http://localhost:4000/api/status/overview | jq
+curl -s 'http://localhost:4000/api/v1/explorer/blocks?channel=soclogs&limit=5' | jq
+curl -s 'http://localhost:4000/api/v1/chaincode/definition?channel=soclogs&name=lognotary' | jq
 curl -s -H "x-admin-password: changeme" "http://localhost:4000/api/admin/logs?service=lognotary-ccaas&tail=20"
 ```
-
-## Troubleshooting
-
-### 1) DNS resolution fails for `lognotary-ccaas`
-
-- Check peer DNS from host:
-  ```bash
-  docker exec peer0.org1.example.com getent hosts lognotary-ccaas
-  ```
-- Ensure container is on `socnet` network:
-  ```bash
-  docker inspect lognotary-ccaas --format '{{json .NetworkSettings.Networks}}'
-  ```
-
-### 2) CCaaS down/unreachable
-
-- Restart from UI admin panel (recommended), or CLI:
-  ```bash
-  docker restart lognotary-ccaas
-  docker logs lognotary-ccaas --tail 100
-  ```
-
-### 3) peer commands fail (`env_org1.sh` not loaded)
-
-- Validate scripts exist:
-  ```bash
-  ls /opt/fabric-dev/socnet/compose/env_org1.sh /opt/fabric-dev/socnet/compose/env_org2.sh
-  ```
-- Re-run bootstrap:
-  ```bash
-  /opt/fabric-dev/socnet/start_socnet.sh up
-  ```
-
-### 4) docker network missing
-
-- Confirm `socnet` exists:
-  ```bash
-  docker network ls | grep socnet
-  ```
-- If missing, bootstrap again:
-  ```bash
-  /opt/fabric-dev/socnet/start_socnet.sh up
-  ```
