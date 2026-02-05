@@ -260,27 +260,31 @@ export function App() {
                   </tbody>
                 </table>
               </Panel>
-            </div>
 
-            <aside className="overview-rail">
-              <Panel title="Latest Events">
-                <ul className="feed">
-                  {(overview?.latestEvents || []).map((evt: any, idx: number) => (
-                    <li key={idx}><span>{new Date(evt.timestamp).toLocaleTimeString()}</span> <b>{evt.type}</b> {evt.message}</li>
-                  ))}
-                </ul>
-              </Panel>
-              <Panel title="Admin Actions (Guarded)">
-                <div className="admin">
-                  <input value={adminPass} onChange={(e) => setAdminPass(e.target.value)} type="password" placeholder="Admin password" />
-                  <select value={selectedService} onChange={(e) => setSelectedService(e.target.value)}>
-                    {overview?.services?.map((svc: any) => <option key={svc.name}>{svc.name}</option>)}
-                  </select>
-                  <div className="row"><button onClick={fetchLogs}>View logs (tail 200)</button><button onClick={restart}>Restart service</button></div>
-                  <pre>{logs || 'No logs loaded.'}</pre>
-                </div>
-              </Panel>
-            </aside>
+              <div className="overview-bottom">
+                <section>
+                  <Panel title="Latest Events">
+                    <ul className="feed">
+                      {(overview?.latestEvents || []).map((evt: any, idx: number) => (
+                        <li key={idx}><span>{new Date(evt.timestamp).toLocaleTimeString()}</span> <b>{evt.type}</b> {evt.message}</li>
+                      ))}
+                    </ul>
+                  </Panel>
+                </section>
+                <section>
+                  <Panel title="Admin Actions (Guarded)">
+                    <div className="admin">
+                      <input value={adminPass} onChange={(e) => setAdminPass(e.target.value)} type="password" placeholder="Admin password" />
+                      <select value={selectedService} onChange={(e) => setSelectedService(e.target.value)}>
+                        {overview?.services?.map((svc: any) => <option key={svc.name}>{svc.name}</option>)}
+                      </select>
+                      <div className="row"><button onClick={fetchLogs}>View logs (tail 200)</button><button onClick={restart}>Restart service</button></div>
+                      <pre>{logs || 'No logs loaded.'}</pre>
+                    </div>
+                  </Panel>
+                </section>
+              </div>
+            </div>
           </section>
         )}
 
