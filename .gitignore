@@ -1,33 +1,14 @@
-# Node
-node_modules/
-npm-debug.log
-
-# Fabric generated
-*.block
-*.tx
-*.tar.gz
-wallet/
-data/
-ledgersData/
-fabric-ca/
-organizations/
-
-# Docker
-*.log
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Fabric binaries / build outputs
+@"
+# Fabric binaries (DON'T push these)
 bin/
 builders/
-config/
+
+# Generated runtime data
 production/
 var/
 tmp/
 
-# Generated network artifacts
+# Generated Fabric artifacts
 **/crypto-config/
 **/organizations/
 **/channel-artifacts/
@@ -35,8 +16,9 @@ tmp/
 **/*.block
 **/*.tx
 **/*.pb
-**/*.tar.gz
 **/*.tgz
+**/*.tar.gz
 
 # Node
 node_modules/
+"@ | Out-File -Encoding utf8 .gitignore
