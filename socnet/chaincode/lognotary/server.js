@@ -15,5 +15,4 @@ const server = shim.server(new LogNotaryChaincode(), {
   address
 });
 
-server.start();
 console.log(`LogNotary CCaaS server started on ${address}`);
