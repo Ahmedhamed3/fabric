@@ -12,8 +12,7 @@ if (!ccid) {
 
 const server = shim.server(new LogNotaryChaincode(), {
   ccid,
-  address,
-  tlsProps: { disabled: true }
+  address
 });
 
 server.start();
