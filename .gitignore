@@ -22,3 +22,39 @@ tmp/
 # Node
 node_modules/
 "@ | Out-File -Encoding utf8 .gitignore
+
+# =========================
+# Python / OCSF Workspace
+# =========================
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+
+# OCSF runtime outputs (logs, evidence, checkpoints)
+ocsf-workspace/out/
+ocsf-workspace/state/
+
+# Local virtual environments
+venv/
+.venv/
+
+# Nested schema repo (keep local only)
+ocsf-workspace/ocsf-schema/
+
+
+# =========================
+# OS / Editor
+# =========================
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.vscode/
+.idea/
+
+
+# WSL / Windows filesystem junk
+*.lnk
