@@ -19,3 +19,24 @@ organizations/
 .DS_Store
 Thumbs.db
 
+# Fabric binaries / build outputs
+bin/
+builders/
+config/
+production/
+var/
+tmp/
+
+# Generated network artifacts
+**/crypto-config/
+**/organizations/
+**/channel-artifacts/
+**/system-genesis-block/
+**/*.block
+**/*.tx
+**/*.pb
+**/*.tar.gz
+**/*.tgz
+
+# Node
+node_modules/
