@@ -155,10 +155,10 @@ app.post("/api/v1/evidence/commit", async (req, res) => {
     return res.status(400).json({ error: "evidence_commit must be an object" });
   }
 
-  const evidenceId =
-    evidenceCommit?.evidence_id ||
-    evidenceCommit?.evidenceId ||
-    `evidence-${Date.now()}-${crypto.randomBytes(4).toString("hex")}`;
+  const evidenceId = evidenceCommit?.evidence_id;
+  if (typeof evidenceId !== "string" || !evidenceId.trim()) {
+    return res.status(400).json({ error: "evidence_commit.evidence_id must be a non-empty string" });
+  }
 
   const manifest = buildManifest({
     evidenceId,

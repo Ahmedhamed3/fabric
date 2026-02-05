@@ -76,11 +76,13 @@ fresh_wipe() {
   stop_background
 
   echo "[run.sh] Dev wipe: bringing down socnet"
-  docker compose -f "${SOCNET_DIR}/compose/docker-compose.yaml" down --volumes --remove-orphans || true
-
-  echo "[run.sh] Dev wipe: removing socnet containers and ledger volumes"
-  docker rm -f orderer.example.com peer0.org1.example.com peer0.org2.example.com lognotary-ccaas >/dev/null 2>&1 || true
-  docker volume rm orderer_data peer0org1_data peer0org2_data >/dev/null 2>&1 || true
+  if (cd "${SOCNET_DIR}/compose" && docker compose down --volumes --remove-orphans); then
+    echo "[run.sh] Dev wipe: socnet docker compose down completed"
+  else
+    echo "[run.sh] Dev wipe: docker compose down failed, falling back to explicit container/volume removal"
+    docker rm -f orderer.example.com peer0.org1.example.com peer0.org2.example.com lognotary-ccaas >/dev/null 2>&1 || true
+    docker volume rm orderer_data peer0org1_data peer0org2_data >/dev/null 2>&1 || true
+  fi
 
   echo "[run.sh] Dev wipe: clearing evidence-api storage"
   rm -rf "${EVIDENCE_API_DIR}/storage"/*
