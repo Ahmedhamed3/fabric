@@ -1,5 +1,16 @@
 #!/usr/bin/env bash
-set -euo pipefail
+
+if [ -z "${BASH_VERSION:-}" ]; then
+  echo "ERROR: this script must be run with bash (e.g. ./socnet/start_socnet.sh)." >&2
+  exit 1
+fi
+if [ "${BASH_VERSINFO[0]:-0}" -lt 4 ]; then
+  echo "ERROR: bash 4+ is required. Detected: ${BASH_VERSION}." >&2
+  exit 1
+fi
+
+set -eu
+set -o pipefail
 
 # -----------------------------
 # Config (edit if needed)
@@ -36,6 +47,7 @@ ensure_hosts() {
   fi
 
   if grep -q "peer0.org1.example.com" /etc/hosts; then
+    log "WSL hosts already configured"
     return
   fi
 
@@ -126,7 +138,7 @@ dns_check_from_peers() {
 print_usage() {
   cat <<USAGE
 
-✅ Socnet is up. Next, use these convenience commands:
+Socnet is up. Next, use these convenience commands:
 
 1) Load Org1 env in your CURRENT terminal:
    source $SOCNET_DIR/compose/env_org1.sh
@@ -196,14 +208,18 @@ need_cmd python3
 
 case "${1:-up}" in
   up)
+    log "Step 1/5: validating local host mappings"
     ensure_hosts
+    log "Step 2/5: ensuring Docker network exists"
     ensure_network
+    log "Step 3/5: starting Fabric containers"
     start_fabric
     # You need peer CLI env to read package id; if peers are not ready yet, this might fail.
     # We'll try a few times.
+    log "Step 4/5: building chaincode service image"
     build_cc_image
 
-    log "Detecting Package ID for label: $CC_LABEL"
+    log "Step 5/5: detecting Package ID for label: $CC_LABEL"
     pkg_id=""
     for i in 1 2 3 4 5; do
       pkg_id="$(get_pkg_id || true)"
