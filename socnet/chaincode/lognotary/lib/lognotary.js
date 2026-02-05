@@ -2,7 +2,7 @@
 
 const shim = require('fabric-shim');
 
-class LogNotaryChaincode {
+class LogNotaryChaincode extends shim.ChaincodeInterface {
   async Init(stub) {
     return shim.success();
   }
