@@ -378,44 +378,28 @@ run_cc_container() {
   docker logs "$CC_CONTAINER" --tail 20 || true
 }
 
-probe_ccaas_via_peer() {
-  local probe_key="__ccaas_probe__"
-  source_org1
-  ensure_peer_joined_channel "$CHANNEL"
-  set +e
-  local output
-  output="$(peer chaincode query -C "$CHANNEL" -n "$CC_NAME" -c "{\"Args\":[\"GetLog\",\"$probe_key\"]}" 2>&1)"
-  local rc=$?
-  set -e
-
-  if [[ $rc -eq 0 ]]; then
-    return 0
-  fi
-
-  if grep -qiE "chaincode .* not found|connection refused|deadline exceeded|failed to connect|endorsement failure" <<<"$output"; then
-    return 1
-  fi
-
-  # Non-connectivity error means chaincode container is reachable.
-  return 0
+probe_ccaas_local() {
+  docker exec "$CC_CONTAINER" sh -lc '
+    ss -lnt 2>/dev/null | grep -q ":9999" ||
+    netstat -lnt 2>/dev/null | grep -q ":9999" ||
+    grep -qi "270F" /proc/net/tcp
+  '
 }
 
 wait_for_ccaas_ready() {
   local max_attempts="${1:-20}"
   local sleep_s="${2:-2}"
 
-  log "Waiting for CCaaS readiness (container running + peer connectivity checks)"
-  source_org1
-  ensure_peer_joined_channel "$CHANNEL"
+  log "Waiting for CCaaS readiness (container running + local listen check)"
   for ((i=1; i<=max_attempts; i++)); do
     if [[ "$(docker inspect -f '{{.State.Running}}' "$CC_CONTAINER" 2>/dev/null || true)" != "true" ]]; then
       echo "ERROR: CCaaS container '$CC_CONTAINER' is not running while waiting for readiness." >&2
-      docker logs "$CC_CONTAINER" --tail 100 || true
+      docker logs "$CC_CONTAINER" --tail 50 || true
       exit 1
     fi
 
-    if probe_ccaas_via_peer; then
-      log "CCaaS is reachable by peers"
+    if probe_ccaas_local; then
+      echo "[OK] CCaaS listening on 9999"
       return 0
     fi
 
@@ -423,8 +407,8 @@ wait_for_ccaas_ready() {
     sleep "$sleep_s"
   done
 
-  echo "ERROR: CCaaS container '$CC_CONTAINER' did not become reachable by peers in time." >&2
-  docker logs "$CC_CONTAINER" --tail 200 || true
+  echo "ERROR: CCaaS container '$CC_CONTAINER' did not become reachable in time." >&2
+  docker logs "$CC_CONTAINER" --tail 50 || true
   exit 1
 }
 
