@@ -16,6 +16,56 @@ type TxDetail = {
   raw: Record<string, unknown>;
 };
 
+type EvidenceBundleItem = {
+  bundle_id: string;
+  time_start_utc: string;
+  time_end_utc: string;
+  event_count: number;
+  host: string | null;
+  source_type: string | null;
+  product: string | null;
+  channel: string | null;
+  class_uid_counts: Record<string, number>;
+  raw_hash_sha256: string | null;
+  ocsf_hash_sha256: string | null;
+  fabric_tx_id: string | null;
+};
+
+type EvidenceBundleDetail = {
+  bundle_id: string;
+  time_start_utc: string;
+  time_end_utc: string;
+  event_count: number;
+  source: {
+    host: string | null;
+    source_type: string | null;
+    vendor: string | null;
+    product: string | null;
+    channel: string | null;
+    collector_instance_id: string | null;
+  };
+  hashes: {
+    raw_hash_sha256: string | null;
+    ocsf_hash_sha256: string | null;
+  };
+  sizes: {
+    raw_size_bytes: number;
+    ocsf_size_bytes: number;
+  };
+  class_uid_counts: Record<string, number>;
+  created_utc: string;
+  fabric_tx_id: string | null;
+  refs: {
+    manifest_path: string;
+    raw_path: string;
+    ocsf_path: string;
+  };
+  computed: {
+    window_duration_seconds: number | null;
+  };
+  manifest: Record<string, unknown>;
+};
+
 type NavKey =
   | 'overview'
   | 'explorer-blocks'
@@ -23,7 +73,8 @@ type NavKey =
   | 'explorer-search'
   | 'chaincode-definition'
   | 'chaincode-invocations'
-  | 'audit-exports';
+  | 'audit-exports'
+  | 'evidence';
 
 const statusClass = (status: string) => (status === 'Healthy' ? 'pill healthy' : 'pill degraded');
 
@@ -57,6 +108,20 @@ export function App() {
   const [searchError, setSearchError] = useState('');
   const [exportBundle, setExportBundle] = useState<any>(null);
   const [showRaw, setShowRaw] = useState(false);
+
+  const [evidenceItems, setEvidenceItems] = useState<EvidenceBundleItem[]>([]);
+  const [evidenceTotal, setEvidenceTotal] = useState(0);
+  const [evidenceLoading, setEvidenceLoading] = useState(false);
+  const [evidenceError, setEvidenceError] = useState('');
+  const [evidenceHost, setEvidenceHost] = useState('');
+  const [evidenceSourceType, setEvidenceSourceType] = useState('');
+  const [evidenceFromUtc, setEvidenceFromUtc] = useState('');
+  const [evidenceToUtc, setEvidenceToUtc] = useState('');
+  const [evidenceClassUid, setEvidenceClassUid] = useState('');
+  const [selectedBundleId, setSelectedBundleId] = useState('');
+  const [selectedBundle, setSelectedBundle] = useState<EvidenceBundleDetail | null>(null);
+  const [bundleDetailLoading, setBundleDetailLoading] = useState(false);
+  const [bundleDetailError, setBundleDetailError] = useState('');
 
   const refreshOverview = async () => {
     try {
@@ -173,6 +238,56 @@ export function App() {
     }
   };
 
+  const loadEvidenceBundles = async () => {
+    setEvidenceLoading(true);
+    setEvidenceError('');
+    try {
+      const q = new URLSearchParams();
+      if (evidenceHost.trim()) q.set('host', evidenceHost.trim());
+      if (evidenceSourceType) q.set('source_type', evidenceSourceType);
+      if (evidenceFromUtc) q.set('from_utc', new Date(evidenceFromUtc).toISOString());
+      if (evidenceToUtc) q.set('to_utc', new Date(evidenceToUtc).toISOString());
+      if (evidenceClassUid.trim()) q.set('class_uid', evidenceClassUid.trim());
+      q.set('limit', '100');
+      q.set('offset', '0');
+      const data = await api<{ items: EvidenceBundleItem[]; total: number }>(`/api/evidence/v1/evidence/bundles?${q.toString()}`);
+      setEvidenceItems(data.items ?? []);
+      setEvidenceTotal(data.total ?? 0);
+    } catch (e) {
+      setEvidenceError((e as Error).message);
+    } finally {
+      setEvidenceLoading(false);
+    }
+  };
+
+  const loadEvidenceBundleDetail = async (bundleId: string) => {
+    setSelectedBundleId(bundleId);
+    setBundleDetailLoading(true);
+    setBundleDetailError('');
+    try {
+      const data = await api<EvidenceBundleDetail>(`/api/evidence/v1/evidence/bundles/${encodeURIComponent(bundleId)}`);
+      setSelectedBundle(data);
+    } catch (e) {
+      setSelectedBundle(null);
+      setBundleDetailError((e as Error).message);
+    } finally {
+      setBundleDetailLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (nav === 'evidence') {
+      loadEvidenceBundles();
+    }
+  }, [nav]);
+
+  const formatClassUidSummary = (classUids: Record<string, number>) =>
+    Object.entries(classUids)
+      .map(([key, value]) => `${key}:${value}`)
+      .join(', ');
+
+  const shortBundleId = (bundleId: string) => (bundleId.length > 16 ? `${bundleId.slice(0, 10)}...${bundleId.slice(-6)}` : bundleId);
+
   if (loading) return <div className="center">Initializing Fabric SOC Console...</div>;
 
   return (
@@ -200,6 +315,7 @@ export function App() {
           onPick={setNav}
         />
         <NavGroup title="Audit" items={[{ key: 'audit-exports', label: 'Exports' }]} nav={nav} onPick={setNav} />
+        <NavGroup title="Evidence" items={[{ key: 'evidence', label: 'Evidence' }]} nav={nav} onPick={setNav} />
       </aside>
 
       <main className="content">
@@ -406,6 +522,72 @@ export function App() {
                 <div className="row"><button onClick={() => copyText(JSON.stringify(exportBundle))}>Copy bundle</button></div>
                 <pre>{JSON.stringify(exportBundle, null, 2)}</pre>
               </>
+            )}
+          </Panel>
+        )}
+
+        {nav === 'evidence' && (
+          <Panel title="Evidence Bundles">
+            <div className="toolbar wrap">
+              <input placeholder="Host" value={evidenceHost} onChange={(e) => setEvidenceHost(e.target.value)} />
+              <select value={evidenceSourceType} onChange={(e) => setEvidenceSourceType(e.target.value)}>
+                <option value="">All source types</option>
+                <option value="endpoint">endpoint</option>
+                <option value="sysmon">sysmon</option>
+              </select>
+              <input type="datetime-local" value={evidenceFromUtc} onChange={(e) => setEvidenceFromUtc(e.target.value)} />
+              <input type="datetime-local" value={evidenceToUtc} onChange={(e) => setEvidenceToUtc(e.target.value)} />
+              <input placeholder="Class UID" value={evidenceClassUid} onChange={(e) => setEvidenceClassUid(e.target.value)} />
+              <button onClick={loadEvidenceBundles}>Apply Filters</button>
+            </div>
+            {evidenceError && <div className="error">{evidenceError}</div>}
+            {evidenceLoading ? <p>Loading evidence bundles...</p> : (
+              <>
+                <p>Showing {evidenceItems.length} / {evidenceTotal} bundles.</p>
+                <table>
+                  <thead><tr><th>Time Window</th><th>Host</th><th>Source</th><th>Event Count</th><th>Class UID Summary</th><th>Bundle ID</th><th>Proof</th></tr></thead>
+                  <tbody>
+                    {evidenceItems.length ? evidenceItems.map((item) => (
+                      <tr key={item.bundle_id}>
+                        <td>{new Date(item.time_start_utc).toLocaleString()} → {new Date(item.time_end_utc).toLocaleString()}</td>
+                        <td>{item.host ?? '-'}</td>
+                        <td>{item.source_type ?? '-'} / {item.product ?? '-'}</td>
+                        <td>{item.event_count}</td>
+                        <td>{formatClassUidSummary(item.class_uid_counts) || '-'}</td>
+                        <td className="mono">{shortBundleId(item.bundle_id)}</td>
+                        <td>
+                          <button onClick={() => loadEvidenceBundleDetail(item.bundle_id)}>View Manifest</button>
+                          <div className="mono">tx: {item.fabric_tx_id ?? 'n/a'}</div>
+                        </td>
+                      </tr>
+                    )) : <tr><td colSpan={7}>No evidence bundles found.</td></tr>}
+                  </tbody>
+                </table>
+              </>
+            )}
+
+            {selectedBundleId && (
+              <div className="panel evidence-detail">
+                <h3>Bundle Detail · <span className="mono">{selectedBundleId}</span></h3>
+                {bundleDetailLoading ? <p>Loading bundle detail...</p> : bundleDetailError ? <div className="error">{bundleDetailError}</div> : selectedBundle && (
+                  <>
+                    <ul className="kv">
+                      <li><b>Bundle ID</b><span className="mono">{selectedBundle.bundle_id}</span></li>
+                      <li><b>Window Duration</b><span>{selectedBundle.computed.window_duration_seconds ?? '-'} seconds</span></li>
+                      <li><b>Raw Hash</b><span className="mono">{selectedBundle.hashes.raw_hash_sha256 ?? '-'}</span></li>
+                      <li><b>OCSF Hash</b><span className="mono">{selectedBundle.hashes.ocsf_hash_sha256 ?? '-'}</span></li>
+                      <li><b>Raw Path</b><span className="mono">{selectedBundle.refs.raw_path}</span></li>
+                      <li><b>OCSF Path</b><span className="mono">{selectedBundle.refs.ocsf_path}</span></li>
+                      <li><b>Manifest Path</b><span className="mono">{selectedBundle.refs.manifest_path}</span></li>
+                    </ul>
+                    <div className="row">
+                      <button onClick={() => copyText(selectedBundle.bundle_id)}>Copy bundle_id</button>
+                      <button onClick={() => copyText(`${selectedBundle.fabric_tx_id ?? ''} ${selectedBundle.bundle_id}`.trim())}>Open Fabric Proof</button>
+                    </div>
+                    <pre>{JSON.stringify(selectedBundle.manifest, null, 2)}</pre>
+                  </>
+                )}
+              </div>
             )}
           </Panel>
         )}
