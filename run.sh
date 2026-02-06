@@ -50,12 +50,6 @@ start_stack() {
   echo "[run.sh] Starting socnet"
   bash "${SOCNET_DIR}/start_socnet.sh" up
 
-  echo "[run.sh] Deploying lognotary chaincode"
-  bash "${SOCNET_DIR}/compose/deploy_lognotary_ccaas.sh"
-
-  echo "[run.sh] Ensuring CCaaS container is running"
-  docker start lognotary-ccaas >/dev/null 2>&1 || true
-
   ensure_deps
   stop_background
 
