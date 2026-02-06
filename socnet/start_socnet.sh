@@ -13,7 +13,7 @@ set -eu
 set -o pipefail
 
 export PATH="/opt/fabric-dev/tools-fabric-3/fabric-samples/bin:$PATH"
-export FABRIC_CFG_PATH="/opt/fabric-dev/socnet/configtx"
+export FABRIC_CFG_PATH="/opt/fabric-dev/config"
 export CORE_PEER_TLS_ENABLED=true
 
 # -----------------------------
@@ -56,6 +56,20 @@ CHANNEL_PROFILE="SocChannel"
 # Helpers
 # -----------------------------
 log() { echo -e "\n[+] $*\n"; }
+
+set_peer_org1() {
+  export CORE_PEER_LOCALMSPID="Org1MSP"
+  export CORE_PEER_MSPCONFIGPATH="/opt/fabric-dev/socnet/crypto-config/peerOrganizations/org1.example.com/users/Admin@org1.example.com/msp"
+  export CORE_PEER_ADDRESS="peer0.org1.example.com:7051"
+  export CORE_PEER_TLS_ROOTCERT_FILE="/opt/fabric-dev/socnet/crypto-config/peerOrganizations/org1.example.com/peers/peer0.org1.example.com/tls/ca.crt"
+}
+
+set_peer_org2() {
+  export CORE_PEER_LOCALMSPID="Org2MSP"
+  export CORE_PEER_MSPCONFIGPATH="/opt/fabric-dev/socnet/crypto-config/peerOrganizations/org2.example.com/users/Admin@org2.example.com/msp"
+  export CORE_PEER_ADDRESS="peer0.org2.example.com:9051"
+  export CORE_PEER_TLS_ROOTCERT_FILE="/opt/fabric-dev/socnet/crypto-config/peerOrganizations/org2.example.com/peers/peer0.org2.example.com/tls/ca.crt"
+}
 
 fatal() {
   echo "ERROR: $*" >&2
@@ -113,13 +127,13 @@ start_fabric() {
 }
 
 source_org1() {
-  # shellcheck disable=SC1090
-  source "$COMPOSE_DIR/env_org1.sh"
+  set_peer_org1
+  export ORDERER_CA="/opt/fabric-dev/socnet/crypto-config/ordererOrganizations/example.com/orderers/orderer.example.com/tls/ca.crt"
 }
 
 source_org2() {
-  # shellcheck disable=SC1090
-  source "$COMPOSE_DIR/env_org2.sh"
+  set_peer_org2
+  export ORDERER_CA="/opt/fabric-dev/socnet/crypto-config/ordererOrganizations/example.com/orderers/orderer.example.com/tls/ca.crt"
 }
 
 get_pkg_id() {
@@ -170,10 +184,6 @@ is_committed() {
     | grep -q "Version: $CC_VERSION, Sequence: $CC_SEQUENCE"
 }
 
-current_peer_has_channel() {
-  peer channel list 2>/dev/null | grep -Eq "(^|[[:space:]])${CHANNEL}([[:space:]]|$)"
-}
-
 ensure_peer_joined_channel() {
   local channel="$1"
   peer channel list | grep -q "$channel" || {
@@ -185,7 +195,7 @@ ensure_peer_joined_channel() {
 
 ensure_channel_soclogs() {
   local orderer_join_block="/tmp/${CHANNEL}.block"
-  local peer_genesis_block="/tmp/${CHANNEL}_genesis.block"
+  local peer_genesis_block="/tmp/soclogs_genesis.block"
   local orderer_tls_ca orderer_admin_tls_dir
 
   command -v configtxgen >/dev/null 2>&1 || fatal "configtxgen not found (Fabric binaries not installed or not in PATH)"
@@ -226,51 +236,34 @@ ensure_channel_soclogs() {
       --client-key /tmp/orderer-admin-client.key
   fi
 
-  set_peer_env() {
-    local org="$1"
-    if [[ "$org" == "org1" ]]; then
-      export CORE_PEER_LOCALMSPID="Org1MSP"
-      export CORE_PEER_ADDRESS="peer0.org1.example.com:7051"
-      export CORE_PEER_MSPCONFIGPATH="$CRYPTO_ROOT/peerOrganizations/org1.example.com/users/Admin@org1.example.com/msp"
-      export CORE_PEER_TLS_ROOTCERT_FILE="$ORG1_TLS_CA"
-    else
-      export CORE_PEER_LOCALMSPID="Org2MSP"
-      export CORE_PEER_ADDRESS="peer0.org2.example.com:9051"
-      export CORE_PEER_MSPCONFIGPATH="$CRYPTO_ROOT/peerOrganizations/org2.example.com/users/Admin@org2.example.com/msp"
-      export CORE_PEER_TLS_ROOTCERT_FILE="$ORG2_TLS_CA"
-    fi
-  }
-
-  join_peer_if_needed() {
-    local peer_label="$1"
-    local org="$2"
-
-    set_peer_env "$org"
-    if current_peer_has_channel; then
-      log "[OK] Peer already joined"
-      return 0
-    fi
-
+  set_peer_org1
+  if peer channel list 2>/dev/null | grep -q "^soclogs$"; then
+    echo "[OK] Org1 peer already joined soclogs"
+  else
+    echo "[INFO] Fetching genesis block for soclogs (Org1)"
     peer channel fetch 0 "$peer_genesis_block" \
       -o orderer.example.com:7050 \
-      -c "$CHANNEL" \
+      -c soclogs \
       --tls \
-      --cafile "$orderer_tls_ca" \
-      >/dev/null 2>&1 || fatal "failed to fetch genesis block for $CHANNEL from orderer"
+      --cafile /opt/fabric-dev/socnet/crypto-config/ordererOrganizations/example.com/orderers/orderer.example.com/msp/tlscacerts/tlsca.example.com-cert.pem
 
-    log "Joining ${peer_label} to channel $CHANNEL"
+    if [[ ! -s "$peer_genesis_block" ]]; then
+      fatal "failed to fetch genesis block for soclogs from orderer"
+    fi
+
+    echo "[INFO] Joining Org1 peer to soclogs"
     peer channel join -b "$peer_genesis_block"
-  }
+  fi
 
-  join_peer_if_needed "Org1 peer" "org1"
-  join_peer_if_needed "Org2 peer" "org2"
+  set_peer_org2
+  if peer channel list 2>/dev/null | grep -q "^soclogs$"; then
+    echo "[OK] Org2 peer already joined soclogs"
+  else
+    echo "[INFO] Joining Org2 peer to soclogs"
+    peer channel join -b "$peer_genesis_block"
+  fi
 
-  log "Re-checking channel membership on both peers"
-  set_peer_env "org1"
-  ensure_peer_joined_channel "$CHANNEL"
-  set_peer_env "org2"
-  ensure_peer_joined_channel "$CHANNEL"
-  set_peer_env "org1"
+  set_peer_org1
 }
 
 ensure_chaincode_lifecycle() {
