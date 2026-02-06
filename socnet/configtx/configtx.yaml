@@ -76,8 +76,15 @@ Channel: &ChannelDefaults
     Admins:  { Type: ImplicitMeta, Rule: "MAJORITY Admins" }
   Capabilities: *ChannelCapabilities
 
+Consortiums:
+  SocConsortium:
+    Organizations:
+      - *Org1
+      - *Org2
+
 Profiles:
   SocChannel:
+    Consortium: SocConsortium
     <<: *ChannelDefaults
 
     Orderer:
