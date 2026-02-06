@@ -1,7 +1,9 @@
 import asyncio
+import contextlib
 import json
 import urllib.parse
 import urllib.request
+import os
 from pathlib import Path
 from html import escape
 from string import Template
@@ -63,6 +65,7 @@ from app.normalizers.windows_security_to_ocsf.mapper import (
 from app.utils.http_status import tail_ndjson
 from app.utils.evidence_hashing import apply_evidence_hashing
 from app.utils.timeutil import utc_now_iso
+from app.bundling import TimeWindowBundler
 
 app = FastAPI(
     title="Log → OCSF Converter (MVP)",
@@ -72,15 +75,76 @@ app = FastAPI(
 )
 
 connector_manager = ConnectorManager()
+bundle_manager = TimeWindowBundler(window_minutes=5)
+bundle_flush_task: Optional[asyncio.Task] = None
+
+
+async def _flush_bundle_loop() -> None:
+    evidence_api_base = os.getenv("EVIDENCE_API_BASE", "http://127.0.0.1:4100")
+    while True:
+        await asyncio.sleep(1)
+        ready = bundle_manager.flush_ready()
+        for bundle in ready:
+            payload = {
+                "bundle_id": bundle.bundle_id,
+                "raw_bundle_ndjson": bundle.raw_ndjson,
+                "ocsf_bundle_ndjson": bundle.ocsf_ndjson,
+                "bundle_manifest": bundle.manifest,
+            }
+            request = urllib.request.Request(
+                f"{evidence_api_base}/api/v1/evidence/commit-bundle",
+                data=json.dumps(payload).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            try:
+                with urllib.request.urlopen(request, timeout=15):
+                    pass
+            except Exception:
+                continue
+
+
+def _queue_event_for_bundle(raw_envelope: Dict[str, Any], ocsf_event: Optional[Dict[str, Any]]) -> None:
+    if not ocsf_event:
+        return
+    source = raw_envelope.get("source") or {}
+    collector = source.get("collector") or {}
+    source_meta = {
+        "type": source.get("type"),
+        "vendor": source.get("vendor"),
+        "product": source.get("product"),
+        "channel": source.get("channel"),
+        "host": collector.get("host"),
+        "collector": {
+            "name": collector.get("name"),
+            "instance_id": collector.get("instance_id"),
+        },
+        "ocsf_version": (ocsf_event.get("metadata") or {}).get("version"),
+    }
+    event_time = ((raw_envelope.get("event") or {}).get("time") or {}).get("observed_utc")
+    bundle_manager.add_event(
+        raw_envelope=raw_envelope,
+        ocsf_event=ocsf_event,
+        source=source_meta,
+        event_time_utc=event_time,
+    )
 
 
 @app.on_event("startup")
 async def startup_connectors() -> None:
+    global bundle_flush_task
     await asyncio.to_thread(connector_manager.startup)
+    bundle_flush_task = asyncio.create_task(_flush_bundle_loop())
 
 
 @app.on_event("shutdown")
 async def shutdown_connectors() -> None:
+    global bundle_flush_task
+    if bundle_flush_task is not None:
+        bundle_flush_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await bundle_flush_task
+        bundle_flush_task = None
     await asyncio.to_thread(connector_manager.shutdown)
 
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
@@ -1840,6 +1904,7 @@ async def pipeline_event(source: str, key: str):
     original = _extract_original_payload(matched, source_key)
     if source_key == "sysmon":
         payload = _build_sysmon_ocsf_payload(matched)
+        _queue_event_for_bundle(matched, payload["ocsf_event"])
         return JSONResponse(
             {
                 "source": source_key,
@@ -1851,6 +1916,7 @@ async def pipeline_event(source: str, key: str):
         )
     if source_key == "security":
         payload = _build_security_ocsf_payload(matched)
+        _queue_event_for_bundle(matched, payload["ocsf_event"])
         return JSONResponse(
             {
                 "source": source_key,
@@ -1861,6 +1927,7 @@ async def pipeline_event(source: str, key: str):
             }
         )
     payload = _build_elastic_ocsf_payload(matched)
+    _queue_event_for_bundle(matched, payload["ocsf_event"])
     return JSONResponse(
         {
             "source": source_key,

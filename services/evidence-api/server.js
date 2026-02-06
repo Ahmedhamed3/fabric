@@ -23,6 +23,18 @@ function prettyJson(value) {
   return JSON.stringify(value, null, 2);
 }
 
+function canonicalJson(value) {
+  if (value === null || typeof value !== "object") {
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => canonicalJson(item)).join(",")}]`;
+  }
+  const keys = Object.keys(value).sort();
+  const parts = keys.map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`);
+  return `{${parts.join(",")}}`;
+}
+
 function toUtcIso(value) {
   if (!value) {
     return null;
@@ -202,6 +214,60 @@ app.post("/api/v1/evidence/commit", async (req, res) => {
   } catch (error) {
     return res.status(500).json({
       error: "Failed to commit evidence",
+      detail: error.message,
+    });
+  }
+});
+
+app.post("/api/v1/evidence/commit-bundle", async (req, res) => {
+  const { bundle_id: bundleId, raw_bundle_ndjson: rawBundleNdjson, ocsf_bundle_ndjson: ocsfBundleNdjson, bundle_manifest: bundleManifest } = req.body || {};
+
+  if (typeof bundleId !== "string" || !bundleId.trim()) {
+    return res.status(400).json({ error: "bundle_id must be a non-empty string" });
+  }
+  if (typeof rawBundleNdjson !== "string" || !rawBundleNdjson.trim()) {
+    return res.status(400).json({ error: "raw_bundle_ndjson must be a non-empty string" });
+  }
+  if (typeof ocsfBundleNdjson !== "string" || !ocsfBundleNdjson.trim()) {
+    return res.status(400).json({ error: "ocsf_bundle_ndjson must be a non-empty string" });
+  }
+  if (!bundleManifest || typeof bundleManifest !== "object" || Array.isArray(bundleManifest)) {
+    return res.status(400).json({ error: "bundle_manifest must be an object" });
+  }
+  if (bundleManifest.bundle_id !== bundleId) {
+    return res.status(400).json({ error: "bundle_manifest.bundle_id must match bundle_id" });
+  }
+
+  const bundleDir = path.join(storageRoot, "bundles", bundleId);
+
+  try {
+    await fs.mkdir(bundleDir, { recursive: true });
+    await fs.writeFile(path.join(bundleDir, "raw.ndjson"), rawBundleNdjson, "utf8");
+    await fs.writeFile(path.join(bundleDir, "ocsf.ndjson"), ocsfBundleNdjson, "utf8");
+    await fs.writeFile(path.join(bundleDir, "manifest.json"), prettyJson(bundleManifest), "utf8");
+
+    const invokeResult = await runInvokeScript(bundleId, canonicalJson(bundleManifest));
+
+    const stored = {
+      bundle_id: bundleId,
+      manifest: bundleManifest,
+      refs: {
+        raw_ndjson: path.join(bundleDir, "raw.ndjson"),
+        ocsf_ndjson: path.join(bundleDir, "ocsf.ndjson"),
+        manifest_json: path.join(bundleDir, "manifest.json"),
+      },
+      fabric_tx_id: invokeResult.fabricTxId,
+    };
+    inMemoryIndex.set(bundleId, stored);
+
+    return res.json({
+      bundle_id: bundleId,
+      fabric_tx_id: invokeResult.fabricTxId,
+      status: "BUNDLE_NOTARIZED",
+    });
+  } catch (error) {
+    return res.status(500).json({
+      error: "Failed to commit bundle",
       detail: error.message,
     });
   }
