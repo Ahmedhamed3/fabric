@@ -77,17 +77,23 @@ Channel: &ChannelDefaults
   Capabilities: *ChannelCapabilities
 
 Profiles:
-  SocGenesis:
+  SocJoin:
     <<: *ChannelDefaults
+
     Orderer:
       <<: *OrdererDefaults
       Organizations:
         - *OrdererOrg
-    Consortiums:
-      SocConsortium:
-        Organizations:
-          - *Org1
-          - *Org2
+      Capabilities:
+        <<: *OrdererCapabilities
+
+    Application:
+      <<: *ApplicationDefaults
+      Organizations:
+        - *Org1
+        - *Org2
+      Capabilities:
+        <<: *ApplicationCapabilities
 
   SocChannel:
     <<: *ChannelDefaults
@@ -99,4 +105,4 @@ Profiles:
         - *Org2
       Capabilities:
         <<: *ApplicationCapabilities
- 
+
