@@ -60,7 +60,8 @@ start_stack() {
   start_background "ocsf-ui" "${OCSF_DIR}" "python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8000"
 
   echo "[run.sh] Starting fabric-ui"
-  start_background "fabric-ui" "${FABRIC_UI_DIR}" "npm run dev"
+  local fabric_env="FABRIC_ENV_SCRIPT=${SOCNET_DIR}/compose/env_org1.sh FABRIC_ENV_SCRIPT_ORG2=${SOCNET_DIR}/compose/env_org2.sh FABRIC_BIN_DIR=/opt/fabric-dev/tools-fabric-3/fabric-samples/bin FABRIC_CFG_PATH=${ROOT_DIR}/config"
+  start_background "fabric-ui" "${FABRIC_UI_DIR}" "${fabric_env} npm run dev"
 
   echo "[run.sh] Stack started. Logs in ${LOG_DIR}"
 }

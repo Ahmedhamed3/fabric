@@ -5,10 +5,11 @@ export function runCommand(
   command: string,
   args: string[],
   timeoutMs = 12000,
-  cwd?: string
+  cwd?: string,
+  env?: NodeJS.ProcessEnv
 ): Promise<CommandResult> {
   return new Promise((resolve) => {
-    const child = spawn(command, args, { cwd, env: process.env });
+    const child = spawn(command, args, { cwd, env: env ?? process.env });
     let stdout = '';
     let stderr = '';
     let done = false;
