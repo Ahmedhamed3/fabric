@@ -12,6 +12,10 @@ fi
 set -eu
 set -o pipefail
 
+export PATH="/opt/fabric-dev/tools-fabric-3/fabric-samples/bin:$PATH"
+export FABRIC_CFG_PATH="/opt/fabric-dev/socnet/configtx"
+export CORE_PEER_TLS_ENABLED=true
+
 # -----------------------------
 # Config (edit if needed)
 # -----------------------------
@@ -38,7 +42,7 @@ PKG_FILE="$PKG_DIR/$CC_LABEL.tgz"
 CODE_TAR="$PKG_DIR/code.tar.gz"
 
 FABRIC_DEV_ROOT="$(cd "$SOCNET_DIR/.." && pwd)"
-FABRIC_BIN_DIR="$FABRIC_DEV_ROOT/bin"
+FABRIC_BIN_DIR="/opt/fabric-dev/tools-fabric-3/fabric-samples/bin"
 
 NETWORK="socnet"
 
@@ -46,9 +50,6 @@ CRYPTO_ROOT=""
 ORG1_TLS_CA=""
 ORG2_TLS_CA=""
 CONFIGTX_RUNTIME_DIR=""
-CHANNEL_ARTIFACTS_DIR="$SOCNET_DIR/channel-artifacts"
-CHANNEL_TX_FILE="$CHANNEL_ARTIFACTS_DIR/${CHANNEL}.tx"
-CHANNEL_BLOCK_FILE="$CHANNEL_ARTIFACTS_DIR/${CHANNEL}.block"
 CHANNEL_PROFILE="SocChannel"
 
 # -----------------------------
@@ -65,12 +66,6 @@ need_cmd() {
   command -v "$1" >/dev/null 2>&1 || fatal "missing command: $1"
 }
 
-cleanup_runtime_configtx() {
-  if [[ -n "${CONFIGTX_RUNTIME_DIR}" && -d "${CONFIGTX_RUNTIME_DIR}" ]]; then
-    rm -rf "${CONFIGTX_RUNTIME_DIR}"
-  fi
-}
-
 detect_crypto_root() {
   local global_crypto_root="/opt/fabric-dev/crypto-config"
   local repo_socnet_crypto_root="$FABRIC_DEV_ROOT/socnet/crypto-config"
@@ -85,55 +80,6 @@ detect_crypto_root() {
 
   ORG1_TLS_CA="$CRYPTO_ROOT/peerOrganizations/org1.example.com/peers/peer0.org1.example.com/tls/ca.crt"
   ORG2_TLS_CA="$CRYPTO_ROOT/peerOrganizations/org2.example.com/peers/peer0.org2.example.com/tls/ca.crt"
-}
-
-validate_configtx_mspdirs() {
-  local configtx_file="$1"
-  local configtx_dir mspdir raw_path
-  local missing=()
-
-  [[ -f "$configtx_file" ]] || fatal "configtx.yaml not found at $configtx_file"
-  configtx_dir="$(cd "$(dirname "$configtx_file")" && pwd)"
-
-  while IFS= read -r raw_path; do
-    [[ -n "$raw_path" ]] || continue
-    mspdir="${raw_path//\"/}"
-    mspdir="${mspdir//\'/}"
-
-    if [[ "$mspdir" != /* ]]; then
-      mspdir="$configtx_dir/$mspdir"
-    fi
-
-    if [[ ! -d "$mspdir" ]]; then
-      missing+=("$mspdir")
-    fi
-  done < <(awk '/^[[:space:]]*MSPDir:[[:space:]]*/ { print $2 }' "$configtx_file")
-
-  if (( ${#missing[@]} > 0 )); then
-    printf 'ERROR: Missing MSPDir paths in %s:\n' "$configtx_file" >&2
-    printf '  - %s\n' "${missing[@]}" >&2
-    exit 1
-  fi
-}
-
-prepare_runtime_configtx() {
-  local runtime_configtx_file
-
-  detect_crypto_root
-  [[ -f "$CONFIGTX_FILE" ]] || fatal "configtx.yaml not found at $CONFIGTX_FILE"
-
-  CONFIGTX_RUNTIME_DIR="$(mktemp -d)"
-  runtime_configtx_file="$CONFIGTX_RUNTIME_DIR/configtx.yaml"
-  cp "$CONFIGTX_FILE" "$runtime_configtx_file"
-
-  sed -i \
-    -e "s|^[[:space:]]*MSPDir:.*ordererOrganizations/example.com/msp$|    MSPDir: ${CRYPTO_ROOT}/ordererOrganizations/example.com/msp|" \
-    -e "s|^[[:space:]]*MSPDir:.*peerOrganizations/org1.example.com/msp$|    MSPDir: ${CRYPTO_ROOT}/peerOrganizations/org1.example.com/msp|" \
-    -e "s|^[[:space:]]*MSPDir:.*peerOrganizations/org2.example.com/msp$|    MSPDir: ${CRYPTO_ROOT}/peerOrganizations/org2.example.com/msp|" \
-    "$runtime_configtx_file"
-
-  validate_configtx_mspdirs "$runtime_configtx_file"
-  export FABRIC_CFG_PATH="$CONFIGTX_RUNTIME_DIR"
 }
 
 ensure_hosts() {
@@ -167,13 +113,11 @@ start_fabric() {
 }
 
 source_org1() {
-  export PATH="$FABRIC_BIN_DIR:$PATH"
   # shellcheck disable=SC1090
   source "$COMPOSE_DIR/env_org1.sh"
 }
 
 source_org2() {
-  export PATH="$FABRIC_BIN_DIR:$PATH"
   # shellcheck disable=SC1090
   source "$COMPOSE_DIR/env_org2.sh"
 }
@@ -240,56 +184,93 @@ ensure_peer_joined_channel() {
 }
 
 ensure_channel_soclogs() {
-  local fetch_ok=0
+  local orderer_join_block="/tmp/${CHANNEL}.block"
+  local peer_genesis_block="/tmp/${CHANNEL}_genesis.block"
+  local orderer_tls_ca orderer_admin_tls_dir
 
   command -v configtxgen >/dev/null 2>&1 || fatal "configtxgen not found (Fabric binaries not installed or not in PATH)"
-  prepare_runtime_configtx
+  command -v osnadmin >/dev/null 2>&1 || fatal "osnadmin not found (Fabric binaries not installed or not in PATH)"
+  detect_crypto_root
 
-  mkdir -p "$CHANNEL_ARTIFACTS_DIR"
+  orderer_tls_ca="$CRYPTO_ROOT/ordererOrganizations/example.com/orderers/orderer.example.com/tls/ca.crt"
+  orderer_admin_tls_dir="$CRYPTO_ROOT/ordererOrganizations/example.com/users/Admin@example.com/tls"
 
-  log "Generating create-channel transaction for $CHANNEL (profile $CHANNEL_PROFILE)"
-  configtxgen -profile "$CHANNEL_PROFILE" -outputCreateChannelTx "$CHANNEL_TX_FILE" -channelID "$CHANNEL" || fatal "failed to generate channel transaction for '$CHANNEL'"
+  [[ -f "$orderer_tls_ca" ]] || fatal "orderer TLS CA not found at $orderer_tls_ca"
+  [[ -d "$orderer_admin_tls_dir" ]] || fatal "orderer admin TLS dir not found at $orderer_admin_tls_dir"
 
-  [[ -s "$CHANNEL_TX_FILE" ]] || fatal "channel transaction file is missing or empty: $CHANNEL_TX_FILE"
-
-  source_org1
-  if peer channel fetch 0 "$CHANNEL_BLOCK_FILE" -o orderer.example.com:7050 --ordererTLSHostnameOverride orderer.example.com -c "$CHANNEL" --tls --cafile "$ORDERER_CA" >/dev/null 2>&1; then
-    fetch_ok=1
-    log "Channel $CHANNEL already exists on the orderer"
+  if [[ ! -s "$orderer_join_block" ]]; then
+    log "Generating orderer join block for $CHANNEL (profile SocGenesis)"
+    configtxgen -profile SocGenesis -channelID "$CHANNEL" -outputBlock "$orderer_join_block" \
+      || fatal "failed to generate orderer join block for '$CHANNEL'"
   fi
 
-  if [[ "$fetch_ok" -eq 0 ]]; then
-    log "Creating channel $CHANNEL"
-    source_org1
-    peer channel create -o orderer.example.com:7050 --ordererTLSHostnameOverride orderer.example.com -c "$CHANNEL" -f "$CHANNEL_TX_FILE" --outputBlock "$CHANNEL_BLOCK_FILE" --tls --cafile "$ORDERER_CA" || fatal "failed to create channel '$CHANNEL'"
+  cp "$orderer_admin_tls_dir/ca.crt" /tmp/orderer-admin-ca.crt
+  cp "$orderer_admin_tls_dir/client.crt" /tmp/orderer-admin-client.crt
+  cp "$orderer_admin_tls_dir/client.key" /tmp/orderer-admin-client.key
 
-    peer channel fetch 0 "$CHANNEL_BLOCK_FILE" -o orderer.example.com:7050 --ordererTLSHostnameOverride orderer.example.com -c "$CHANNEL" --tls --cafile "$ORDERER_CA" >/dev/null 2>&1 || fatal "channel '$CHANNEL' was not fetchable after creation"
-
-    peer channel list | grep -Eq "(^|[[:space:]])${CHANNEL}([[:space:]]|$)" || fatal "Channel $CHANNEL does not exist after creation"
-  fi
-
-  source_org1
-  if current_peer_has_channel; then
-    log "Org1 peer already joined channel $CHANNEL"
+  if osnadmin channel list \
+    -o orderer.example.com:7053 \
+    --ca-file /tmp/orderer-admin-ca.crt \
+    --client-cert /tmp/orderer-admin-client.crt \
+    --client-key /tmp/orderer-admin-client.key \
+    | grep -q "$CHANNEL"; then
+    log "[OK] Orderer already joined"
   else
-    log "Joining Org1 peer to channel $CHANNEL"
-    peer channel join -b "$CHANNEL_BLOCK_FILE"
+    log "[INFO] Joining orderer to $CHANNEL"
+    osnadmin channel join \
+      --channelID "$CHANNEL" \
+      --config-block "$orderer_join_block" \
+      -o orderer.example.com:7053 \
+      --ca-file /tmp/orderer-admin-ca.crt \
+      --client-cert /tmp/orderer-admin-client.crt \
+      --client-key /tmp/orderer-admin-client.key
   fi
 
-  source_org2
-  if current_peer_has_channel; then
-    log "Org2 peer already joined channel $CHANNEL"
-  else
-    log "Joining Org2 peer to channel $CHANNEL"
-    peer channel join -b "$CHANNEL_BLOCK_FILE"
-  fi
+  set_peer_env() {
+    local org="$1"
+    if [[ "$org" == "org1" ]]; then
+      export CORE_PEER_LOCALMSPID="Org1MSP"
+      export CORE_PEER_ADDRESS="peer0.org1.example.com:7051"
+      export CORE_PEER_MSPCONFIGPATH="$CRYPTO_ROOT/peerOrganizations/org1.example.com/users/Admin@org1.example.com/msp"
+      export CORE_PEER_TLS_ROOTCERT_FILE="$ORG1_TLS_CA"
+    else
+      export CORE_PEER_LOCALMSPID="Org2MSP"
+      export CORE_PEER_ADDRESS="peer0.org2.example.com:9051"
+      export CORE_PEER_MSPCONFIGPATH="$CRYPTO_ROOT/peerOrganizations/org2.example.com/users/Admin@org2.example.com/msp"
+      export CORE_PEER_TLS_ROOTCERT_FILE="$ORG2_TLS_CA"
+    fi
+  }
+
+  join_peer_if_needed() {
+    local peer_label="$1"
+    local org="$2"
+
+    set_peer_env "$org"
+    if current_peer_has_channel; then
+      log "[OK] Peer already joined"
+      return 0
+    fi
+
+    peer channel fetch 0 "$peer_genesis_block" \
+      -o orderer.example.com:7050 \
+      -c "$CHANNEL" \
+      --tls \
+      --cafile "$orderer_tls_ca" \
+      >/dev/null 2>&1 || fatal "failed to fetch genesis block for $CHANNEL from orderer"
+
+    log "Joining ${peer_label} to channel $CHANNEL"
+    peer channel join -b "$peer_genesis_block"
+  }
+
+  join_peer_if_needed "Org1 peer" "org1"
+  join_peer_if_needed "Org2 peer" "org2"
 
   log "Re-checking channel membership on both peers"
-  source_org1
+  set_peer_env "org1"
   ensure_peer_joined_channel "$CHANNEL"
-  source_org2
+  set_peer_env "org2"
   ensure_peer_joined_channel "$CHANNEL"
-  source_org1
+  set_peer_env "org1"
 }
 
 ensure_chaincode_lifecycle() {
@@ -532,7 +513,6 @@ need_cmd docker
 need_cmd awk
 need_cmd grep
 need_cmd python3
-trap cleanup_runtime_configtx EXIT
 
 case "${1:-up}" in
   up)
