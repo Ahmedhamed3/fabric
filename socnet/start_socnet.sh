@@ -16,6 +16,7 @@ set -o pipefail
 # Config (edit if needed)
 # -----------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export FABRIC_CFG_PATH="$SCRIPT_DIR/configtx"
 SOCNET_DIR="$SCRIPT_DIR"
 COMPOSE_DIR="$SOCNET_DIR/compose"
 CONFIGTX_DIR="$SOCNET_DIR/configtx"
@@ -171,19 +172,35 @@ ensure_channel_soclogs() {
     return 0
   fi
 
-  source_org1
   if [[ ! -f "$CHANNEL_TX_FILE" ]]; then
     log "Generating create-channel transaction for $CHANNEL (profile $CHANNEL_PROFILE)"
-    FABRIC_CFG_PATH="$CONFIGTX_DIR" configtxgen -profile "$CHANNEL_PROFILE" -outputCreateChannelTx "$CHANNEL_TX_FILE" -channelID "$CHANNEL"
+    configtxgen -profile "$CHANNEL_PROFILE" -outputCreateChannelTx "$CHANNEL_TX_FILE" -channelID "$CHANNEL"
   else
     log "Using existing create-channel transaction: $CHANNEL_TX_FILE"
   fi
 
-  if peer channel fetch 0 "$CHANNEL_BLOCK_FILE" -o orderer.example.com:7050 -c "$CHANNEL" --tls --cafile "$ORDERER_CA" >/dev/null 2>&1; then
+  if [[ ! -s "$CHANNEL_TX_FILE" ]]; then
+    echo "ERROR: channel transaction file is missing or empty: $CHANNEL_TX_FILE" >&2
+    exit 1
+  fi
+
+  source_org1
+  if peer channel fetch 0 "$CHANNEL_BLOCK_FILE" \
+    -o orderer.example.com:7050 \
+    --ordererTLSHostnameOverride orderer.example.com \
+    -c "$CHANNEL" \
+    --tls --cafile "$ORDERER_CA" >/dev/null 2>&1; then
     log "Channel $CHANNEL already exists on the orderer"
   else
     log "Creating channel $CHANNEL"
-    peer channel create -o orderer.example.com:7050 -c "$CHANNEL" -f "$CHANNEL_TX_FILE" --outputBlock "$CHANNEL_BLOCK_FILE" --tls --cafile "$ORDERER_CA"
+    source_org1
+    peer channel create \
+      -o orderer.example.com:7050 \
+      --ordererTLSHostnameOverride orderer.example.com \
+      -c "$CHANNEL" \
+      -f "$CHANNEL_TX_FILE" \
+      --outputBlock "$CHANNEL_BLOCK_FILE" \
+      --tls --cafile "$ORDERER_CA"
   fi
 
   source_org1
@@ -390,7 +407,10 @@ case "${1:-up}" in
     log "Step 2/5: starting Fabric containers (Compose-managed network)"
     start_fabric
     log "Step 3/6: ensuring channel '$CHANNEL' exists and peers have joined"
-    ensure_channel_soclogs
+    if ! ensure_channel_soclogs; then
+      echo "ERROR: channel setup failed; aborting lifecycle + CCaaS startup." >&2
+      exit 1
+    fi
 
     log "Step 4/6: building chaincode service image"
     build_cc_image
