@@ -55,4 +55,8 @@ cd "$ROOT_DIR"
 npm install
 
 echo "[fabric-ui] Step 4/4: starting Fabric UI backend + frontend"
+FABRIC_ENV_SCRIPT="${SOCNET_DIR}/compose/env_org1.sh" \
+FABRIC_ENV_SCRIPT_ORG2="${SOCNET_DIR}/compose/env_org2.sh" \
+FABRIC_BIN_DIR="/opt/fabric-dev/tools-fabric-3/fabric-samples/bin" \
+FABRIC_CFG_PATH="${REPO_ROOT}/config" \
 npm run dev

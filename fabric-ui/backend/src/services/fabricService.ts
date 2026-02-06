@@ -1,3 +1,4 @@
+import path from 'node:path';
 import { config, requiredServices } from '../config.js';
 import {
   AuditExportResponse,
@@ -22,6 +23,8 @@ type Snapshot = {
 export class FabricService {
   private events: Array<{ type: string; message: string; timestamp: string }> = [];
   private previous: Snapshot | null = null;
+  private fabricEnvCache = new Map<string, NodeJS.ProcessEnv>();
+  private diagnosticsLogged = false;
 
   async ensureNetworkStarted(): Promise<void> {
     await runCommand('bash', [config.startScript, 'up'], 240000);
@@ -32,9 +35,160 @@ export class FabricService {
     this.events = this.events.slice(0, 10);
   }
 
+  private ensurePath(basePath: string): string {
+    if (!basePath) return config.fabricBinDir;
+    const parts = basePath.split(':');
+    if (parts.includes(config.fabricBinDir)) return basePath;
+    return `${config.fabricBinDir}:${basePath}`;
+  }
+
+  private baseFabricEnv(): NodeJS.ProcessEnv {
+    return {
+      ...process.env,
+      PATH: this.ensurePath(process.env.PATH ?? ''),
+      FABRIC_CFG_PATH: config.fabricCfgPath
+    };
+  }
+
+  private parseEnvOutput(stdout: string): NodeJS.ProcessEnv {
+    const env: NodeJS.ProcessEnv = {};
+    stdout
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .forEach((line) => {
+        const idx = line.indexOf('=');
+        if (idx > 0) {
+          const key = line.slice(0, idx);
+          const value = line.slice(idx + 1);
+          env[key] = value;
+        }
+      });
+    return env;
+  }
+
+  private fallbackFabricEnv(envScript: string): NodeJS.ProcessEnv {
+    const isOrg2 = envScript.includes('org2');
+    const orgDomain = isOrg2 ? 'org2.example.com' : 'org1.example.com';
+    const peerHost = `peer0.${orgDomain}`;
+    const peerAddress = isOrg2 ? `${peerHost}:9051` : `${peerHost}:7051`;
+    const orgMsp = isOrg2 ? 'Org2MSP' : 'Org1MSP';
+
+    return {
+      ...this.baseFabricEnv(),
+      CORE_PEER_TLS_ENABLED: 'true',
+      CORE_PEER_LOCALMSPID: orgMsp,
+      CORE_PEER_ADDRESS: peerAddress,
+      CORE_PEER_MSPCONFIGPATH: path.join(
+        config.socnetDir,
+        'crypto-config',
+        'peerOrganizations',
+        orgDomain,
+        'users',
+        `Admin@${orgDomain}`,
+        'msp'
+      ),
+      CORE_PEER_TLS_ROOTCERT_FILE: path.join(
+        config.socnetDir,
+        'crypto-config',
+        'peerOrganizations',
+        orgDomain,
+        'peers',
+        peerHost,
+        'tls',
+        'ca.crt'
+      ),
+      ORDERER_CA: path.join(
+        config.socnetDir,
+        'crypto-config',
+        'ordererOrganizations',
+        'example.com',
+        'orderers',
+        'orderer.example.com',
+        'tls',
+        'ca.crt'
+      )
+    };
+  }
+
+  private async getFabricEnv(envScript: string): Promise<NodeJS.ProcessEnv> {
+    const cached = this.fabricEnvCache.get(envScript);
+    if (cached) return cached;
+
+    const baseEnv = this.baseFabricEnv();
+    const sourceCmd = `source "${envScript}" >/dev/null 2>&1; env`;
+    const result = await runCommand('bash', ['-lc', sourceCmd], 8000, config.socnetDir, baseEnv);
+    let merged = baseEnv;
+
+    if (result.exitCode === 0 && result.stdout.trim()) {
+      const scriptEnv = this.parseEnvOutput(result.stdout);
+      merged = {
+        ...baseEnv,
+        ...scriptEnv
+      };
+    } else {
+      console.error(
+        `[fabric-ui] Failed to source Fabric env script (${envScript}). Falling back to defaults. ${result.stderr}`
+      );
+      merged = this.fallbackFabricEnv(envScript);
+    }
+
+    merged.PATH = this.ensurePath(merged.PATH ?? '');
+    merged.FABRIC_CFG_PATH = merged.FABRIC_CFG_PATH ?? config.fabricCfgPath;
+    merged.FABRIC_ENV_SCRIPT = envScript;
+
+    this.fabricEnvCache.set(envScript, merged);
+    console.log(`[fabric-ui] Using Fabric env script: ${envScript}`);
+    return merged;
+  }
+
   private runPeerCmd(envScript: string, cmd: string, timeout = 15000) {
-    const full = `source ${envScript} && export PATH=/opt/fabric-dev/bin:$PATH && ${cmd}`;
-    return runCommand('bash', ['-lc', full], timeout, config.socnetDir);
+    return this.getFabricEnv(envScript).then((env) => runCommand('bash', ['-lc', cmd], timeout, config.socnetDir, env));
+  }
+
+  async logFabricDiagnostics(): Promise<void> {
+    if (this.diagnosticsLogged) return;
+    this.diagnosticsLogged = true;
+    const env = await this.getFabricEnv(config.fabricEnvScript);
+    const whichPeer = await runCommand('bash', ['-lc', 'which peer'], 6000, config.socnetDir, env);
+    const whichConfigtxlator = await runCommand('bash', ['-lc', 'which configtxlator'], 6000, config.socnetDir, env);
+    const peerVersion = await runCommand('bash', ['-lc', 'peer version'], 8000, config.socnetDir, env);
+
+    if (whichPeer.exitCode === 0) {
+      console.log(`[fabric-ui] peer binary: ${whichPeer.stdout.trim()}`);
+    } else {
+      console.error('[fabric-ui] peer binary not found. Ensure FABRIC_BIN_DIR is set correctly.');
+    }
+
+    if (whichConfigtxlator.exitCode === 0) {
+      console.log(`[fabric-ui] configtxlator binary: ${whichConfigtxlator.stdout.trim()}`);
+    } else {
+      console.error('[fabric-ui] configtxlator binary not found. Ensure FABRIC_BIN_DIR is set correctly.');
+    }
+
+    if (peerVersion.exitCode === 0) {
+      console.log(`[fabric-ui] peer version: ${peerVersion.stdout.trim()}`);
+    } else {
+      console.error(`[fabric-ui] peer version failed: ${peerVersion.stderr.trim() || 'unknown error'}`);
+    }
+  }
+
+  async checkPeerHealth(): Promise<{ ok: boolean; channel: string; height?: number; error?: string }> {
+    const result = await this.runPeerCmd(config.fabricEnvScript, `peer channel getinfo -c ${config.channel}`, 12000);
+    if (result.exitCode !== 0) {
+      return {
+        ok: false,
+        channel: config.channel,
+        error: result.stderr.trim() || 'peer channel getinfo failed'
+      };
+    }
+    const match = result.stdout.match(/Block height:\s*(\d+)/i);
+    return {
+      ok: Boolean(match),
+      channel: config.channel,
+      height: match ? Number(match[1]) : undefined,
+      error: match ? undefined : 'Unable to parse block height'
+    };
   }
 
   private decodeBlockFromPeerOutput(stdout: string): Record<string, any> | null {
@@ -86,7 +240,7 @@ export class FabricService {
       'exit $rcode'
     ].join(' && ');
 
-    const out = await this.runPeerCmd(`${config.composeDir}/env_org1.sh`, cmd, 20000);
+    const out = await this.runPeerCmd(config.fabricEnvScript, cmd, 20000);
     if (out.exitCode !== 0) {
       return { block: null, warning: `Unable to fetch/decode block ${number}.` };
     }
@@ -138,7 +292,7 @@ export class FabricService {
   }
 
   async getChannels(): Promise<string[]> {
-    const result = await this.runPeerCmd(`${config.composeDir}/env_org1.sh`, 'peer channel list', 12000);
+    const result = await this.runPeerCmd(config.fabricEnvScript, 'peer channel list', 12000);
     if (result.exitCode !== 0) {
       return [config.channel];
     }
@@ -150,8 +304,8 @@ export class FabricService {
 
   async getBlockHeights(): Promise<Record<string, number | null>> {
     const commands = [
-      { peer: 'peer0.org1.example.com', env: `${config.composeDir}/env_org1.sh` },
-      { peer: 'peer0.org2.example.com', env: `${config.composeDir}/env_org2.sh` }
+      { peer: 'peer0.org1.example.com', env: config.fabricEnvScript },
+      { peer: 'peer0.org2.example.com', env: config.fabricEnvScriptOrg2 }
     ];
     const output: Record<string, number | null> = {};
 
@@ -167,11 +321,11 @@ export class FabricService {
   async getChaincode(): Promise<ChaincodeStatus> {
     const errors: string[] = [];
     const committed = await this.runPeerCmd(
-      `${config.composeDir}/env_org1.sh`,
+      config.fabricEnvScript,
       `peer lifecycle chaincode querycommitted -C ${config.channel} -n ${config.ccName}`,
       14000
     );
-    const installed = await this.runPeerCmd(`${config.composeDir}/env_org1.sh`, 'peer lifecycle chaincode queryinstalled', 14000);
+    const installed = await this.runPeerCmd(config.fabricEnvScript, 'peer lifecycle chaincode queryinstalled', 14000);
     const dns = await runCommand('docker', ['exec', 'peer0.org1.example.com', 'getent', 'hosts', config.ccContainer], 8000);
     const ccContainer = await runCommand('docker', ['inspect', '-f', '{{.State.Running}}', config.ccContainer], 7000);
 
@@ -205,7 +359,7 @@ export class FabricService {
 
   async getExplorerBlocks(channel: string, limit = 20, from?: number): Promise<ExplorerBlocksResponse> {
     const warnings: string[] = [];
-    const heightRes = await this.runPeerCmd(`${config.composeDir}/env_org1.sh`, `peer channel getinfo -c ${channel}`, 15000);
+    const heightRes = await this.runPeerCmd(config.fabricEnvScript, `peer channel getinfo -c ${channel}`, 15000);
     const heightMatch = heightRes.stdout.match(/Block height:\s*(\d+)/i);
     if (!heightMatch) {
       return { channel, from: 0, limit, blocks: [], warnings: ['Unable to read channel height.'] };
@@ -287,7 +441,7 @@ export class FabricService {
 
   async getChaincodeDefinition(channel: string, name: string): Promise<ChaincodeDefinitionResponse> {
     const cmd = `peer lifecycle chaincode querycommitted -C ${channel} -n ${name}`;
-    const out = await this.runPeerCmd(`${config.composeDir}/env_org1.sh`, cmd, 14000);
+    const out = await this.runPeerCmd(config.fabricEnvScript, cmd, 14000);
     if (out.exitCode !== 0) throw new Error('Unable to query committed chaincode definition.');
 
     return {
