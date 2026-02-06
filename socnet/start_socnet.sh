@@ -54,8 +54,13 @@ CHANNEL_PROFILE="SocChannel"
 # -----------------------------
 log() { echo -e "\n[+] $*\n"; }
 
+fatal() {
+  echo "ERROR: $*" >&2
+  exit 1
+}
+
 need_cmd() {
-  command -v "$1" >/dev/null 2>&1 || { echo "ERROR: missing command: $1"; exit 1; }
+  command -v "$1" >/dev/null 2>&1 || fatal "missing command: $1"
 }
 
 ensure_hosts() {
@@ -164,27 +169,19 @@ ensure_peer_joined_channel() {
 ensure_channel_soclogs() {
   local fetch_ok=0
 
-  need_cmd configtxgen
+  command -v configtxgen >/dev/null 2>&1 || fatal "configtxgen not found (Fabric binaries not installed or not in PATH)"
+  export FABRIC_CFG_PATH="$CONFIGTX_DIR"
+  [[ -f "$FABRIC_CFG_PATH/configtx.yaml" ]] || fatal "configtx.yaml not found at $FABRIC_CFG_PATH/configtx.yaml"
+
   mkdir -p "$CHANNEL_ARTIFACTS_DIR"
 
-  if [[ ! -f "$CHANNEL_TX_FILE" ]]; then
-    log "Generating create-channel transaction for $CHANNEL (profile $CHANNEL_PROFILE)"
-    configtxgen -profile "$CHANNEL_PROFILE" -outputCreateChannelTx "$CHANNEL_TX_FILE" -channelID "$CHANNEL"
-  else
-    log "Using existing create-channel transaction: $CHANNEL_TX_FILE"
-  fi
+  log "Generating create-channel transaction for $CHANNEL (profile $CHANNEL_PROFILE)"
+  configtxgen -profile "$CHANNEL_PROFILE" -outputCreateChannelTx "$CHANNEL_TX_FILE" -channelID "$CHANNEL" || fatal "failed to generate channel transaction for '$CHANNEL'"
 
-  if [[ ! -s "$CHANNEL_TX_FILE" ]]; then
-    echo "ERROR: channel transaction file is missing or empty: $CHANNEL_TX_FILE" >&2
-    exit 1
-  fi
+  [[ -s "$CHANNEL_TX_FILE" ]] || fatal "channel transaction file is missing or empty: $CHANNEL_TX_FILE"
 
   source_org1
-  if peer channel fetch 0 "$CHANNEL_BLOCK_FILE" \
-    -o orderer.example.com:7050 \
-    --ordererTLSHostnameOverride orderer.example.com \
-    -c "$CHANNEL" \
-    --tls --cafile "$ORDERER_CA" >/dev/null 2>&1; then
+  if peer channel fetch 0 "$CHANNEL_BLOCK_FILE" -o orderer.example.com:7050 --ordererTLSHostnameOverride orderer.example.com -c "$CHANNEL" --tls --cafile "$ORDERER_CA" >/dev/null 2>&1; then
     fetch_ok=1
     log "Channel $CHANNEL already exists on the orderer"
   fi
@@ -192,22 +189,11 @@ ensure_channel_soclogs() {
   if [[ "$fetch_ok" -eq 0 ]]; then
     log "Creating channel $CHANNEL"
     source_org1
-    peer channel create \
-      -o orderer.example.com:7050 \
-      --ordererTLSHostnameOverride orderer.example.com \
-      -c "$CHANNEL" \
-      -f "$CHANNEL_TX_FILE" \
-      --outputBlock "$CHANNEL_BLOCK_FILE" \
-      --tls --cafile "$ORDERER_CA"
+    peer channel create -o orderer.example.com:7050 --ordererTLSHostnameOverride orderer.example.com -c "$CHANNEL" -f "$CHANNEL_TX_FILE" --outputBlock "$CHANNEL_BLOCK_FILE" --tls --cafile "$ORDERER_CA" || fatal "failed to create channel '$CHANNEL'"
 
-    if ! peer channel fetch 0 "$CHANNEL_BLOCK_FILE" \
-      -o orderer.example.com:7050 \
-      --ordererTLSHostnameOverride orderer.example.com \
-      -c "$CHANNEL" \
-      --tls --cafile "$ORDERER_CA" >/dev/null 2>&1; then
-      echo "ERROR: channel '$CHANNEL' was not fetchable after creation." >&2
-      exit 1
-    fi
+    peer channel fetch 0 "$CHANNEL_BLOCK_FILE" -o orderer.example.com:7050 --ordererTLSHostnameOverride orderer.example.com -c "$CHANNEL" --tls --cafile "$ORDERER_CA" >/dev/null 2>&1 || fatal "channel '$CHANNEL' was not fetchable after creation"
+
+    peer channel list | grep -Eq "(^|[[:space:]])${CHANNEL}([[:space:]]|$)" || fatal "Channel $CHANNEL does not exist after creation"
   fi
 
   source_org1
