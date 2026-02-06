@@ -18,6 +18,7 @@ set -o pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SOCNET_DIR="$SCRIPT_DIR"
 COMPOSE_DIR="$SOCNET_DIR/compose"
+CONFIGTX_DIR="$SOCNET_DIR/configtx"
 CC_DIR="$SOCNET_DIR/chaincode/lognotary"
 
 CHANNEL="soclogs"
@@ -41,6 +42,10 @@ NETWORK="socnet"
 
 ORG1_TLS_CA="$SOCNET_DIR/crypto-config/peerOrganizations/org1.example.com/peers/peer0.org1.example.com/tls/ca.crt"
 ORG2_TLS_CA="$SOCNET_DIR/crypto-config/peerOrganizations/org2.example.com/peers/peer0.org2.example.com/tls/ca.crt"
+CHANNEL_ARTIFACTS_DIR="$SOCNET_DIR/channel-artifacts"
+CHANNEL_TX_FILE="$CHANNEL_ARTIFACTS_DIR/${CHANNEL}.tx"
+CHANNEL_BLOCK_FILE="$CHANNEL_ARTIFACTS_DIR/${CHANNEL}.block"
+CHANNEL_PROFILE="SocChannel"
 
 # -----------------------------
 # Helpers
@@ -139,6 +144,65 @@ is_approved_for_current_org() {
 is_committed() {
   peer lifecycle chaincode querycommitted -C "$CHANNEL" -n "$CC_NAME" 2>/dev/null \
     | grep -q "Version: $CC_VERSION, Sequence: $CC_SEQUENCE"
+}
+
+current_peer_has_channel() {
+  peer channel list 2>/dev/null | grep -Eq "(^|[[:space:]])${CHANNEL}([[:space:]]|$)"
+}
+
+ensure_channel_soclogs() {
+  local had_org1=0 had_org2=0
+
+  need_cmd configtxgen
+  mkdir -p "$CHANNEL_ARTIFACTS_DIR"
+
+  source_org1
+  if current_peer_has_channel; then
+    had_org1=1
+  fi
+
+  source_org2
+  if current_peer_has_channel; then
+    had_org2=1
+  fi
+
+  if [[ "$had_org1" -eq 1 && "$had_org2" -eq 1 ]]; then
+    log "Channel $CHANNEL already joined on Org1 and Org2 peers"
+    return 0
+  fi
+
+  source_org1
+  if [[ ! -f "$CHANNEL_TX_FILE" ]]; then
+    log "Generating create-channel transaction for $CHANNEL (profile $CHANNEL_PROFILE)"
+    FABRIC_CFG_PATH="$CONFIGTX_DIR" configtxgen -profile "$CHANNEL_PROFILE" -outputCreateChannelTx "$CHANNEL_TX_FILE" -channelID "$CHANNEL"
+  else
+    log "Using existing create-channel transaction: $CHANNEL_TX_FILE"
+  fi
+
+  if peer channel fetch 0 "$CHANNEL_BLOCK_FILE" -o orderer.example.com:7050 -c "$CHANNEL" --tls --cafile "$ORDERER_CA" >/dev/null 2>&1; then
+    log "Channel $CHANNEL already exists on the orderer"
+  else
+    log "Creating channel $CHANNEL"
+    peer channel create -o orderer.example.com:7050 -c "$CHANNEL" -f "$CHANNEL_TX_FILE" --outputBlock "$CHANNEL_BLOCK_FILE" --tls --cafile "$ORDERER_CA"
+  fi
+
+  source_org1
+  if current_peer_has_channel; then
+    log "Org1 peer already joined channel $CHANNEL"
+  else
+    log "Joining Org1 peer to channel $CHANNEL"
+    peer channel join -b "$CHANNEL_BLOCK_FILE"
+  fi
+
+  source_org2
+  if current_peer_has_channel; then
+    log "Org2 peer already joined channel $CHANNEL"
+  else
+    log "Joining Org2 peer to channel $CHANNEL"
+    peer channel join -b "$CHANNEL_BLOCK_FILE"
+  fi
+
+  source_org1
 }
 
 ensure_chaincode_lifecycle() {
@@ -325,13 +389,16 @@ case "${1:-up}" in
     ensure_hosts
     log "Step 2/5: starting Fabric containers (Compose-managed network)"
     start_fabric
-    log "Step 3/5: building chaincode service image"
+    log "Step 3/6: ensuring channel '$CHANNEL' exists and peers have joined"
+    ensure_channel_soclogs
+
+    log "Step 4/6: building chaincode service image"
     build_cc_image
 
-    log "Step 4/5: ensuring chaincode lifecycle (package/install/approve/commit)"
+    log "Step 5/6: ensuring chaincode lifecycle (package/install/approve/commit)"
     ensure_chaincode_lifecycle
 
-    log "Step 5/5: detecting Package ID for label: $CC_LABEL"
+    log "Step 6/6: detecting Package ID for label: $CC_LABEL"
     pkg_id=""
     for i in 1 2 3 4 5; do
       pkg_id="$(get_pkg_id || true)"
