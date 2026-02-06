@@ -15,16 +15,27 @@ set -o pipefail
 # -----------------------------
 # Config (edit if needed)
 # -----------------------------
-SOCNET_DIR="/opt/fabric-dev/socnet"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SOCNET_DIR="$SCRIPT_DIR"
 COMPOSE_DIR="$SOCNET_DIR/compose"
 CC_DIR="$SOCNET_DIR/chaincode/lognotary"
 
 CHANNEL="soclogs"
 CC_NAME="lognotary"
 CC_LABEL="lognotary_1.0"
+CC_VERSION="1.0"
+CC_SEQUENCE="1"
+INIT_REQUIRED="false"
 CC_IMAGE="lognotary-ccaas:1.0"
 CC_CONTAINER="lognotary-ccaas"
 CC_ADDR="0.0.0.0:9999"
+
+PKG_DIR="$SOCNET_DIR/ccaas-pkg/$CC_NAME"
+PKG_FILE="$PKG_DIR/$CC_LABEL.tgz"
+CODE_TAR="$PKG_DIR/code.tar.gz"
+
+FABRIC_DEV_ROOT="$(cd "$SOCNET_DIR/.." && pwd)"
+FABRIC_BIN_DIR="$FABRIC_DEV_ROOT/bin"
 
 NETWORK="socnet"
 
@@ -71,13 +82,13 @@ start_fabric() {
 }
 
 source_org1() {
-  export PATH=/opt/fabric-dev/bin:$PATH
+  export PATH="$FABRIC_BIN_DIR:$PATH"
   # shellcheck disable=SC1090
   source "$COMPOSE_DIR/env_org1.sh"
 }
 
 source_org2() {
-  export PATH=/opt/fabric-dev/bin:$PATH
+  export PATH="$FABRIC_BIN_DIR:$PATH"
   # shellcheck disable=SC1090
   source "$COMPOSE_DIR/env_org2.sh"
 }
@@ -86,12 +97,121 @@ get_pkg_id() {
   source_org1 >/dev/null 2>&1 || true
   peer lifecycle chaincode queryinstalled 2>/dev/null \
     | awk -v lbl="$CC_LABEL" '
-      $0 ~ "Package ID:" && $0 ~ "Label: "lbl { 
-        sub(/^Package ID: /,""); 
-        split($0,a,","); 
-        print a[1]; 
-        exit 
+      $0 ~ "Package ID:" && $0 ~ "Label: "lbl {
+        sub(/^Package ID: /,"");
+        split($0,a,",");
+        print a[1];
+        exit
       }'
+}
+
+package_chaincode() {
+  mkdir -p "$PKG_DIR"
+  tar -C "$PKG_DIR" -czf "$CODE_TAR" connection.json
+  tar -C "$PKG_DIR" -czf "$PKG_FILE" metadata.json "$(basename "$CODE_TAR")"
+}
+
+is_installed_for_current_org() {
+  peer lifecycle chaincode queryinstalled 2>/dev/null | grep -q "Label: $CC_LABEL"
+}
+
+install_for_current_org() {
+  local output
+  if output=$(peer lifecycle chaincode install "$PKG_FILE" 2>&1); then
+    echo "$output"
+    return 0
+  fi
+
+  if grep -q "already successfully installed" <<<"$output"; then
+    echo "$output"
+    return 0
+  fi
+
+  echo "$output"
+  return 1
+}
+
+is_approved_for_current_org() {
+  peer lifecycle chaincode queryapproved -C "$CHANNEL" -n "$CC_NAME" 2>/dev/null \
+    | grep -q "sequence: $CC_SEQUENCE"
+}
+
+is_committed() {
+  peer lifecycle chaincode querycommitted -C "$CHANNEL" -n "$CC_NAME" 2>/dev/null \
+    | grep -q "Version: $CC_VERSION, Sequence: $CC_SEQUENCE"
+}
+
+ensure_chaincode_lifecycle() {
+  local pkg_id org1_tls_rootcert org2_tls_rootcert
+  local init_args=()
+
+  if [[ "$INIT_REQUIRED" == "true" ]]; then
+    init_args+=(--init-required)
+  fi
+
+  package_chaincode
+
+  source_org1
+  if ! is_installed_for_current_org; then
+    log "Installing chaincode package on Org1"
+    install_for_current_org
+  else
+    log "Chaincode label $CC_LABEL already installed on Org1"
+  fi
+
+  pkg_id="$(get_pkg_id || true)"
+  if [[ -z "$pkg_id" ]]; then
+    echo "ERROR: failed to read package ID for label '$CC_LABEL' from Org1 after install." >&2
+    exit 1
+  fi
+
+  if ! is_approved_for_current_org; then
+    log "Approving $CC_NAME on Org1"
+    peer lifecycle chaincode approveformyorg \
+      -o orderer.example.com:7050 --tls --cafile "$ORDERER_CA" \
+      --channelID "$CHANNEL" --name "$CC_NAME" --version "$CC_VERSION" \
+      --sequence "$CC_SEQUENCE" --package-id "$pkg_id" \
+      "${init_args[@]}"
+  else
+    log "Chaincode definition already approved on Org1"
+  fi
+
+  source_org2
+  if ! is_installed_for_current_org; then
+    log "Installing chaincode package on Org2"
+    install_for_current_org
+  else
+    log "Chaincode label $CC_LABEL already installed on Org2"
+  fi
+
+  if ! is_approved_for_current_org; then
+    log "Approving $CC_NAME on Org2"
+    peer lifecycle chaincode approveformyorg \
+      -o orderer.example.com:7050 --tls --cafile "$ORDERER_CA" \
+      --channelID "$CHANNEL" --name "$CC_NAME" --version "$CC_VERSION" \
+      --sequence "$CC_SEQUENCE" --package-id "$pkg_id" \
+      "${init_args[@]}"
+  else
+    log "Chaincode definition already approved on Org2"
+  fi
+
+  source_org1
+  org1_tls_rootcert="$CORE_PEER_TLS_ROOTCERT_FILE"
+  source_org2
+  org2_tls_rootcert="$CORE_PEER_TLS_ROOTCERT_FILE"
+  source_org1
+
+  if ! is_committed; then
+    log "Committing chaincode definition on channel $CHANNEL"
+    peer lifecycle chaincode commit \
+      -o orderer.example.com:7050 --tls --cafile "$ORDERER_CA" \
+      --channelID "$CHANNEL" --name "$CC_NAME" --version "$CC_VERSION" \
+      --sequence "$CC_SEQUENCE" "${init_args[@]}" \
+      --peerAddresses peer0.org1.example.com:7051 --tlsRootCertFiles "$org1_tls_rootcert" \
+      --peerAddresses peer0.org2.example.com:9051 --tlsRootCertFiles "$org2_tls_rootcert"
+  else
+    log "Chaincode definition already committed on channel $CHANNEL"
+  fi
 }
 
 build_cc_image() {
@@ -135,7 +255,7 @@ Socnet is up. Next, use these convenience commands:
 
 1) Load Org1 env in your CURRENT terminal:
    source $SOCNET_DIR/compose/env_org1.sh
-   export PATH=/opt/fabric-dev/bin:\$PATH
+   export PATH=$FABRIC_BIN_DIR:\$PATH
 
 2) Invoke with both org peers + wait for commit (recommended):
    $SOCNET_DIR/start_socnet.sh invoke PutLog k3 v3
@@ -201,16 +321,17 @@ need_cmd python3
 
 case "${1:-up}" in
   up)
-    log "Step 1/4: validating local host mappings"
+    log "Step 1/5: validating local host mappings"
     ensure_hosts
-    log "Step 2/4: starting Fabric containers (Compose-managed network)"
+    log "Step 2/5: starting Fabric containers (Compose-managed network)"
     start_fabric
-    # You need peer CLI env to read package id; if peers are not ready yet, this might fail.
-    # We'll try a few times.
-    log "Step 3/4: building chaincode service image"
+    log "Step 3/5: building chaincode service image"
     build_cc_image
 
-    log "Step 4/4: detecting Package ID for label: $CC_LABEL"
+    log "Step 4/5: ensuring chaincode lifecycle (package/install/approve/commit)"
+    ensure_chaincode_lifecycle
+
+    log "Step 5/5: detecting Package ID for label: $CC_LABEL"
     pkg_id=""
     for i in 1 2 3 4 5; do
       pkg_id="$(get_pkg_id || true)"
