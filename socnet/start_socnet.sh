@@ -197,6 +197,10 @@ ensure_channel_soclogs() {
   local orderer_join_block="/tmp/${CHANNEL}.block"
   local peer_genesis_block="/tmp/soclogs_genesis.block"
   local orderer_tls_ca orderer_admin_tls_dir
+  local admin_ready_attempts=30
+  local admin_ready_sleep=2
+  local channel_ready_attempts=20
+  local channel_ready_sleep=2
 
   command -v configtxgen >/dev/null 2>&1 || fatal "configtxgen not found (Fabric binaries not installed or not in PATH)"
   command -v osnadmin >/dev/null 2>&1 || fatal "osnadmin not found (Fabric binaries not installed or not in PATH)"
@@ -218,13 +222,28 @@ ensure_channel_soclogs() {
   cp "$orderer_admin_tls_dir/client.crt" /tmp/orderer-admin-client.crt
   cp "$orderer_admin_tls_dir/client.key" /tmp/orderer-admin-client.key
 
-  if osnadmin channel list \
-    -o orderer.example.com:7053 \
-    --ca-file /tmp/orderer-admin-ca.crt \
-    --client-cert /tmp/orderer-admin-client.crt \
-    --client-key /tmp/orderer-admin-client.key \
-    | grep -q "$CHANNEL"; then
-    log "[OK] Orderer already joined"
+  log "Waiting for orderer admin API readiness on :7053"
+  local admin_ready="false"
+  for ((i=1; i<=admin_ready_attempts; i++)); do
+    if osnadmin channel list \
+      -o orderer.example.com:7053 \
+      --ca-file /tmp/orderer-admin-ca.crt \
+      --client-cert /tmp/orderer-admin-client.crt \
+      --client-key /tmp/orderer-admin-client.key \
+      >/tmp/orderer-admin-channels.txt 2>/dev/null; then
+      admin_ready="true"
+      break
+    fi
+    echo "  (retry $i/$admin_ready_attempts) orderer admin API not ready yet..."
+    sleep "$admin_ready_sleep"
+  done
+
+  if [[ "$admin_ready" != "true" ]]; then
+    fatal "orderer admin API did not become ready on :7053 in time"
+  fi
+
+  if grep -q "$CHANNEL" /tmp/orderer-admin-channels.txt; then
+    log "[OK] Orderer already joined (channel '$CHANNEL' exists)"
   else
     log "[INFO] Joining orderer to $CHANNEL"
     osnadmin channel join \
@@ -234,6 +253,27 @@ ensure_channel_soclogs() {
       --ca-file /tmp/orderer-admin-ca.crt \
       --client-cert /tmp/orderer-admin-client.crt \
       --client-key /tmp/orderer-admin-client.key
+  fi
+
+  log "Confirming orderer reports channel '$CHANNEL'"
+  local channel_ready="false"
+  for ((i=1; i<=channel_ready_attempts; i++)); do
+    if osnadmin channel list \
+      -o orderer.example.com:7053 \
+      --ca-file /tmp/orderer-admin-ca.crt \
+      --client-cert /tmp/orderer-admin-client.crt \
+      --client-key /tmp/orderer-admin-client.key \
+      >/tmp/orderer-admin-channels.txt 2>/dev/null \
+      && grep -q "$CHANNEL" /tmp/orderer-admin-channels.txt; then
+      channel_ready="true"
+      break
+    fi
+    echo "  (retry $i/$channel_ready_attempts) channel '$CHANNEL' not visible on orderer yet..."
+    sleep "$channel_ready_sleep"
+  done
+
+  if [[ "$channel_ready" != "true" ]]; then
+    fatal "orderer did not report channel '$CHANNEL'; channel creation/join failed"
   fi
 
   set_peer_org1
