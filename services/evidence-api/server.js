@@ -4,7 +4,7 @@ const crypto = require("crypto");
 const fs = require("fs/promises");
 const path = require("path");
 const Database = require("better-sqlite3");
-const { spawn } = require("child_process");
+const { execFile } = require("child_process");
 
 const app = express();
 app.use(express.json({ limit: "25mb" }));
@@ -17,6 +17,7 @@ const repoRoot = path.resolve(serviceRoot, "../..");
 const storageRoot = path.join(serviceRoot, "storage");
 const dbPath = path.join(storageRoot, "index.db");
 const invokeScript = process.env.FABRIC_INVOKE_SCRIPT || path.join(repoRoot, "socnet", "scripts", "invoke_putlog.sh");
+const healthScript = process.env.FABRIC_HEALTH_SCRIPT || path.join(repoRoot, "socnet", "scripts", "fabric_health_check.sh");
 
 const inMemoryIndex = new Map();
 let db;
@@ -218,31 +219,36 @@ function buildManifest({ evidenceId, evidenceCommit, originalXml, rawEnvelope, o
 
 function runInvokeScript(evidenceId, manifestString) {
   return new Promise((resolve, reject) => {
-    const child = spawn("bash", [invokeScript, evidenceId, manifestString], {
+    execFile(invokeScript, [evidenceId, manifestString], {
       cwd: repoRoot,
       env: process.env,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-
-    let stdout = "";
-    let stderr = "";
-
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk.toString();
-    });
-
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk.toString();
-    });
-
-    child.on("error", (error) => reject(error));
-    child.on("close", (code) => {
-      if (code !== 0) {
-        return reject(new Error(`Invoke failed (exit ${code}): ${stderr || stdout}`));
+      maxBuffer: 10 * 1024 * 1024,
+    }, (error, stdout = "", stderr = "") => {
+      if (error) {
+        return reject(new Error(`Invoke failed: ${stderr || stdout || error.message}`));
       }
       const txMatch = stdout.match(/txid\s*[:=]\s*([A-Za-z0-9]+)/i) || stdout.match(/TxID\s*[:=]\s*([A-Za-z0-9]+)/i);
       const fabricTxId = txMatch ? txMatch[1] : "submitted";
       return resolve({ fabricTxId, stdout, stderr });
+    });
+  });
+}
+
+function runHealthScript() {
+  return new Promise((resolve, reject) => {
+    execFile(healthScript, [], {
+      cwd: repoRoot,
+      env: process.env,
+      maxBuffer: 10 * 1024 * 1024,
+    }, (error, stdout = "", stderr = "") => {
+      if (error) {
+        return reject(new Error(stderr || stdout || error.message));
+      }
+      try {
+        return resolve(JSON.parse(stdout));
+      } catch (parseError) {
+        return reject(new Error(`Invalid health script output: ${parseError.message}`));
+      }
     });
   });
 }
@@ -310,6 +316,20 @@ app.post("/api/v1/evidence/commit", async (req, res) => {
   } catch (error) {
     return res.status(500).json({
       error: "Failed to commit evidence",
+      detail: error.message,
+    });
+  }
+});
+
+app.get("/api/v1/evidence/fabric/health", async (req, res) => {
+  try {
+    const health = await runHealthScript();
+    return res.json(health);
+  } catch (error) {
+    return res.status(500).json({
+      channel_ok: false,
+      chaincode_ok: false,
+      error: "Failed to verify Fabric health",
       detail: error.message,
     });
   }
