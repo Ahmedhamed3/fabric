@@ -11,44 +11,74 @@ MANIFEST_JSON="$2"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SOCNET_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
-ROOT_DIR="$(cd "${SOCNET_DIR}/.." && pwd)"
+REPO_ROOT="$(cd "${SOCNET_DIR}/.." && pwd)"
 
-export PATH="${ROOT_DIR}/bin:${PATH}"
-export FABRIC_CFG_PATH="${ROOT_DIR}/config"
+export PATH="${REPO_ROOT}/bin:${PATH}"
+export FABRIC_CFG_PATH="${REPO_ROOT}/config"
 
 # shellcheck disable=SC1091
 source "${SOCNET_DIR}/compose/env_org1.sh"
 
-# Normalize env files that may contain /opt/fabric-dev defaults.
-CORE_PEER_MSPCONFIGPATH="${CORE_PEER_MSPCONFIGPATH/\/opt\/fabric-dev/${ROOT_DIR}}"
-CORE_PEER_TLS_ROOTCERT_FILE="${CORE_PEER_TLS_ROOTCERT_FILE/\/opt\/fabric-dev/${ROOT_DIR}}"
-ORDERER_CA="${ORDERER_CA/\/opt\/fabric-dev/${ROOT_DIR}}"
+# Normalize env files that may still point at /opt/fabric-dev.
+CORE_PEER_MSPCONFIGPATH="${CORE_PEER_MSPCONFIGPATH/\/opt\/fabric-dev/${REPO_ROOT}}"
+CORE_PEER_TLS_ROOTCERT_FILE="${CORE_PEER_TLS_ROOTCERT_FILE/\/opt\/fabric-dev/${REPO_ROOT}}"
+ORDERER_CA="${ORDERER_CA/\/opt\/fabric-dev/${REPO_ROOT}}"
+FABRIC_CFG_PATH="${FABRIC_CFG_PATH/\/opt\/fabric-dev/${REPO_ROOT}}"
 
-ARGS_JSON="$(python3 - "$EVIDENCE_ID" "$MANIFEST_JSON" <<'PY'
+required_vars=(
+  CORE_PEER_LOCALMSPID
+  CORE_PEER_MSPCONFIGPATH
+  CORE_PEER_ADDRESS
+  ORDERER_CA
+  FABRIC_CFG_PATH
+)
+
+for required_var in "${required_vars[@]}"; do
+  if [[ -z "${!required_var:-}" ]]; then
+    echo "ERROR: required environment variable ${required_var} is not set" >&2
+    exit 1
+  fi
+done
+
+if [[ ! -f "$ORDERER_CA" ]]; then
+  echo "ERROR: ORDERER_CA file not found: $ORDERER_CA" >&2
+  exit 1
+fi
+
+CC_INPUT_FILE="$(mktemp /tmp/cc_input.XXXXXX.json)"
+cleanup() {
+  rm -f "$CC_INPUT_FILE"
+}
+trap cleanup EXIT
+
+python3 - "$EVIDENCE_ID" "$MANIFEST_JSON" "$CC_INPUT_FILE" <<'PY'
 import json
 import sys
 
-print(json.dumps({"Args": ["PutLog", sys.argv[1], sys.argv[2]]}))
+_, evidence_id, manifest_json, output_path = sys.argv
+payload = {"Args": ["PutLog", evidence_id, manifest_json]}
+with open(output_path, "w", encoding="utf-8") as fh:
+    json.dump(payload, fh, ensure_ascii=False)
 PY
-)"
 
 set +e
 OUTPUT="$(peer chaincode invoke \
+  -C soclogs \
+  -n lognotary \
   -o orderer.example.com:7050 \
+  --tls \
+  --cafile "$ORDERER_CA" \
   --ordererTLSHostnameOverride orderer.example.com \
-  --tls --cafile "$ORDERER_CA" \
-  -C soclogs -n lognotary \
   --peerAddresses peer0.org1.example.com:7051 \
   --tlsRootCertFiles "$CORE_PEER_TLS_ROOTCERT_FILE" \
   --peerAddresses peer0.org2.example.com:9051 \
   --tlsRootCertFiles "${SOCNET_DIR}/crypto-config/peerOrganizations/org2.example.com/peers/peer0.org2.example.com/tls/ca.crt" \
   --waitForEvent --waitForEventTimeout 60s \
-  -c "$ARGS_JSON" 2>&1)"
+  -c "$(cat "$CC_INPUT_FILE")" 2>&1)"
 STATUS=$?
 set -e
 
-echo "$OUTPUT"
-
+printf '%s\n' "$OUTPUT"
 if [[ $STATUS -ne 0 ]]; then
   exit $STATUS
 fi
@@ -58,4 +88,4 @@ if [[ -z "$TX_ID" ]]; then
   TX_ID="submitted"
 fi
 
-echo "txid:${TX_ID}"
+printf 'txid:%s\n' "$TX_ID"
