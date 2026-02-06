@@ -62,3 +62,6 @@ pre { max-height: 260px; overflow: auto; background: #05090d; border: 1px solid 
 .error { background: rgba(255,96,125,.1); border: 1px solid var(--bad); color: #ff98aa; padding: 8px; margin-bottom: 12px; }
 .center { padding: 40px; text-align: center; color: var(--muted); }
 @media (max-width: 1080px){ .shell { grid-template-columns: 1fr; } .sidebar { position: static; height: auto; } .two-col { grid-template-columns: 1fr; } }
+
+.toolbar.wrap { flex-wrap: wrap; }
+.evidence-detail { margin-top: 14px; }
