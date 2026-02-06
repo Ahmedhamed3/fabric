@@ -58,3 +58,5 @@ Thumbs.db
 
 # WSL / Windows filesystem junk
 *.lnk
+tools/fabric-samples
+tools-fabric-3/fabric-samples
