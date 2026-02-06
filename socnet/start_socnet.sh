@@ -16,10 +16,10 @@ set -o pipefail
 # Config (edit if needed)
 # -----------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-export FABRIC_CFG_PATH="$SCRIPT_DIR/configtx"
 SOCNET_DIR="$SCRIPT_DIR"
 COMPOSE_DIR="$SOCNET_DIR/compose"
 CONFIGTX_DIR="$SOCNET_DIR/configtx"
+CONFIGTX_FILE="$CONFIGTX_DIR/configtx.yaml"
 CC_DIR="$SOCNET_DIR/chaincode/lognotary"
 
 CHANNEL="soclogs"
@@ -42,8 +42,10 @@ FABRIC_BIN_DIR="$FABRIC_DEV_ROOT/bin"
 
 NETWORK="socnet"
 
-ORG1_TLS_CA="$SOCNET_DIR/crypto-config/peerOrganizations/org1.example.com/peers/peer0.org1.example.com/tls/ca.crt"
-ORG2_TLS_CA="$SOCNET_DIR/crypto-config/peerOrganizations/org2.example.com/peers/peer0.org2.example.com/tls/ca.crt"
+CRYPTO_ROOT=""
+ORG1_TLS_CA=""
+ORG2_TLS_CA=""
+CONFIGTX_RUNTIME_DIR=""
 CHANNEL_ARTIFACTS_DIR="$SOCNET_DIR/channel-artifacts"
 CHANNEL_TX_FILE="$CHANNEL_ARTIFACTS_DIR/${CHANNEL}.tx"
 CHANNEL_BLOCK_FILE="$CHANNEL_ARTIFACTS_DIR/${CHANNEL}.block"
@@ -61,6 +63,77 @@ fatal() {
 
 need_cmd() {
   command -v "$1" >/dev/null 2>&1 || fatal "missing command: $1"
+}
+
+cleanup_runtime_configtx() {
+  if [[ -n "${CONFIGTX_RUNTIME_DIR}" && -d "${CONFIGTX_RUNTIME_DIR}" ]]; then
+    rm -rf "${CONFIGTX_RUNTIME_DIR}"
+  fi
+}
+
+detect_crypto_root() {
+  local global_crypto_root="/opt/fabric-dev/crypto-config"
+  local repo_socnet_crypto_root="$FABRIC_DEV_ROOT/socnet/crypto-config"
+
+  if [[ -d "$global_crypto_root" ]]; then
+    CRYPTO_ROOT="$global_crypto_root"
+  elif [[ -d "$repo_socnet_crypto_root" ]]; then
+    CRYPTO_ROOT="$repo_socnet_crypto_root"
+  else
+    fatal "No crypto-config directory found. Checked '$global_crypto_root' and '$repo_socnet_crypto_root'. Run cryptogen or place crypto material in one of these locations."
+  fi
+
+  ORG1_TLS_CA="$CRYPTO_ROOT/peerOrganizations/org1.example.com/peers/peer0.org1.example.com/tls/ca.crt"
+  ORG2_TLS_CA="$CRYPTO_ROOT/peerOrganizations/org2.example.com/peers/peer0.org2.example.com/tls/ca.crt"
+}
+
+validate_configtx_mspdirs() {
+  local configtx_file="$1"
+  local configtx_dir mspdir raw_path
+  local missing=()
+
+  [[ -f "$configtx_file" ]] || fatal "configtx.yaml not found at $configtx_file"
+  configtx_dir="$(cd "$(dirname "$configtx_file")" && pwd)"
+
+  while IFS= read -r raw_path; do
+    [[ -n "$raw_path" ]] || continue
+    mspdir="${raw_path//\"/}"
+    mspdir="${mspdir//\'/}"
+
+    if [[ "$mspdir" != /* ]]; then
+      mspdir="$configtx_dir/$mspdir"
+    fi
+
+    if [[ ! -d "$mspdir" ]]; then
+      missing+=("$mspdir")
+    fi
+  done < <(awk '/^[[:space:]]*MSPDir:[[:space:]]*/ { print $2 }' "$configtx_file")
+
+  if (( ${#missing[@]} > 0 )); then
+    printf 'ERROR: Missing MSPDir paths in %s:\n' "$configtx_file" >&2
+    printf '  - %s\n' "${missing[@]}" >&2
+    exit 1
+  fi
+}
+
+prepare_runtime_configtx() {
+  local runtime_configtx_file
+
+  detect_crypto_root
+  [[ -f "$CONFIGTX_FILE" ]] || fatal "configtx.yaml not found at $CONFIGTX_FILE"
+
+  CONFIGTX_RUNTIME_DIR="$(mktemp -d)"
+  runtime_configtx_file="$CONFIGTX_RUNTIME_DIR/configtx.yaml"
+  cp "$CONFIGTX_FILE" "$runtime_configtx_file"
+
+  sed -i \
+    -e "s|^[[:space:]]*MSPDir:.*ordererOrganizations/example.com/msp$|    MSPDir: ${CRYPTO_ROOT}/ordererOrganizations/example.com/msp|" \
+    -e "s|^[[:space:]]*MSPDir:.*peerOrganizations/org1.example.com/msp$|    MSPDir: ${CRYPTO_ROOT}/peerOrganizations/org1.example.com/msp|" \
+    -e "s|^[[:space:]]*MSPDir:.*peerOrganizations/org2.example.com/msp$|    MSPDir: ${CRYPTO_ROOT}/peerOrganizations/org2.example.com/msp|" \
+    "$runtime_configtx_file"
+
+  validate_configtx_mspdirs "$runtime_configtx_file"
+  export FABRIC_CFG_PATH="$CONFIGTX_RUNTIME_DIR"
 }
 
 ensure_hosts() {
@@ -170,8 +243,7 @@ ensure_channel_soclogs() {
   local fetch_ok=0
 
   command -v configtxgen >/dev/null 2>&1 || fatal "configtxgen not found (Fabric binaries not installed or not in PATH)"
-  export FABRIC_CFG_PATH="$CONFIGTX_DIR"
-  [[ -f "$FABRIC_CFG_PATH/configtx.yaml" ]] || fatal "configtx.yaml not found at $FABRIC_CFG_PATH/configtx.yaml"
+  prepare_runtime_configtx
 
   mkdir -p "$CHANNEL_ARTIFACTS_DIR"
 
@@ -460,6 +532,7 @@ need_cmd docker
 need_cmd awk
 need_cmd grep
 need_cmd python3
+trap cleanup_runtime_configtx EXIT
 
 case "${1:-up}" in
   up)
