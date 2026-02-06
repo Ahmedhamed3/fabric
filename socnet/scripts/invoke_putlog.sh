@@ -19,11 +19,14 @@ export FABRIC_CFG_PATH="${REPO_ROOT}/config"
 # shellcheck disable=SC1091
 source "${SOCNET_DIR}/compose/env_org1.sh"
 
+ORG2_PEER_TLS_ROOTCERT_FILE="${SOCNET_DIR}/crypto-config/peerOrganizations/org2.example.com/peers/peer0.org2.example.com/tls/ca.crt"
+
 # Normalize env files that may still point at /opt/fabric-dev.
 CORE_PEER_MSPCONFIGPATH="${CORE_PEER_MSPCONFIGPATH/\/opt\/fabric-dev/${REPO_ROOT}}"
 CORE_PEER_TLS_ROOTCERT_FILE="${CORE_PEER_TLS_ROOTCERT_FILE/\/opt\/fabric-dev/${REPO_ROOT}}"
 ORDERER_CA="${ORDERER_CA/\/opt\/fabric-dev/${REPO_ROOT}}"
 FABRIC_CFG_PATH="${FABRIC_CFG_PATH/\/opt\/fabric-dev/${REPO_ROOT}}"
+ORG2_PEER_TLS_ROOTCERT_FILE="${ORG2_PEER_TLS_ROOTCERT_FILE/\/opt\/fabric-dev/${REPO_ROOT}}"
 
 required_vars=(
   CORE_PEER_LOCALMSPID
@@ -42,6 +45,14 @@ done
 
 if [[ ! -f "$ORDERER_CA" ]]; then
   echo "ERROR: ORDERER_CA file not found: $ORDERER_CA" >&2
+  exit 1
+fi
+if [[ ! -f "$CORE_PEER_TLS_ROOTCERT_FILE" ]]; then
+  echo "ERROR: Org1 TLS root cert not found: $CORE_PEER_TLS_ROOTCERT_FILE" >&2
+  exit 1
+fi
+if [[ ! -f "$ORG2_PEER_TLS_ROOTCERT_FILE" ]]; then
+  echo "ERROR: Org2 TLS root cert not found: $ORG2_PEER_TLS_ROOTCERT_FILE" >&2
   exit 1
 fi
 
@@ -72,7 +83,7 @@ OUTPUT="$(peer chaincode invoke \
   --peerAddresses peer0.org1.example.com:7051 \
   --tlsRootCertFiles "$CORE_PEER_TLS_ROOTCERT_FILE" \
   --peerAddresses peer0.org2.example.com:9051 \
-  --tlsRootCertFiles "${SOCNET_DIR}/crypto-config/peerOrganizations/org2.example.com/peers/peer0.org2.example.com/tls/ca.crt" \
+  --tlsRootCertFiles "$ORG2_PEER_TLS_ROOTCERT_FILE" \
   --waitForEvent --waitForEventTimeout 60s \
   -c "$(cat "$CC_INPUT_FILE")" 2>&1)"
 STATUS=$?

@@ -49,6 +49,7 @@ NETWORK="socnet"
 CRYPTO_ROOT=""
 ORG1_TLS_CA=""
 ORG2_TLS_CA=""
+ORG2_PEER_TLS_ROOTCERT_FILE="/opt/fabric-dev/socnet/crypto-config/peerOrganizations/org2.example.com/peers/peer0.org2.example.com/tls/ca.crt"
 CONFIGTX_RUNTIME_DIR=""
 CHANNEL_PROFILE="SocChannel"
 
@@ -94,6 +95,7 @@ detect_crypto_root() {
 
   ORG1_TLS_CA="$CRYPTO_ROOT/peerOrganizations/org1.example.com/peers/peer0.org1.example.com/tls/ca.crt"
   ORG2_TLS_CA="$CRYPTO_ROOT/peerOrganizations/org2.example.com/peers/peer0.org2.example.com/tls/ca.crt"
+  ORG2_PEER_TLS_ROOTCERT_FILE="$ORG2_TLS_CA"
 }
 
 ensure_hosts() {
@@ -493,6 +495,13 @@ PY
 )
 
   source_org1
+  detect_crypto_root
+  if [[ ! -f "${CORE_PEER_TLS_ROOTCERT_FILE:-}" ]]; then
+    fatal "Org1 TLS root cert not found at ${CORE_PEER_TLS_ROOTCERT_FILE:-<unset>}"
+  fi
+  if [[ ! -f "$ORG2_PEER_TLS_ROOTCERT_FILE" ]]; then
+    fatal "Org2 TLS root cert not found at $ORG2_PEER_TLS_ROOTCERT_FILE"
+  fi
   ensure_peer_joined_channel "$CHANNEL"
   peer chaincode invoke \
     -o orderer.example.com:7050 \
@@ -500,9 +509,9 @@ PY
     --tls --cafile "$ORDERER_CA" \
     -C "$CHANNEL" -n "$CC_NAME" \
     --peerAddresses peer0.org1.example.com:7051 \
-    --tlsRootCertFiles "$ORG1_TLS_CA" \
+    --tlsRootCertFiles "$CORE_PEER_TLS_ROOTCERT_FILE" \
     --peerAddresses peer0.org2.example.com:9051 \
-    --tlsRootCertFiles "$ORG2_TLS_CA" \
+    --tlsRootCertFiles "$ORG2_PEER_TLS_ROOTCERT_FILE" \
     --waitForEvent --waitForEventTimeout 60s \
     -c "$args_json"
 }
