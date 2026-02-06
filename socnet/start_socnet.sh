@@ -30,7 +30,8 @@ CC_SEQUENCE="1"
 INIT_REQUIRED="false"
 CC_IMAGE="lognotary-ccaas:1.0"
 CC_CONTAINER="lognotary-ccaas"
-CC_ADDR="0.0.0.0:9999"
+CC_LISTEN_ADDR="0.0.0.0:9999"
+CC_PEER_ADDR="${CC_CONTAINER}:9999"
 
 PKG_DIR="$SOCNET_DIR/ccaas-pkg/$CC_NAME"
 PKG_FILE="$PKG_DIR/$CC_LABEL.tgz"
@@ -315,12 +316,67 @@ run_cc_container() {
 
   docker run -d --name "$CC_CONTAINER" --network "$NETWORK" \
     --network-alias "$CC_CONTAINER" \
-    -e CHAINCODE_SERVER_ADDRESS="$CC_ADDR" \
     -e CHAINCODE_ID="$pkg_id" \
+    -e CHAINCODE_SERVER_ADDRESS="$CC_LISTEN_ADDR" \
+    -e CORE_CHAINCODE_LISTEN_ADDRESS="$CC_LISTEN_ADDR" \
+    -e CORE_CHAINCODE_ADDRESS="$CC_PEER_ADDR" \
     "$CC_IMAGE" >/dev/null
+
+  if [[ "$(docker inspect -f '{{.State.Running}}' "$CC_CONTAINER" 2>/dev/null || true)" != "true" ]]; then
+    echo "ERROR: CCaaS container '$CC_CONTAINER' failed to start." >&2
+    docker logs "$CC_CONTAINER" --tail 100 || true
+    exit 1
+  fi
 
   docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Networks}}\t{{.Ports}}" | egrep "$CC_CONTAINER|peer0|orderer" || true
   docker logs "$CC_CONTAINER" --tail 20 || true
+}
+
+probe_ccaas_via_peer() {
+  local probe_key="__ccaas_probe__"
+  source_org1
+  set +e
+  local output
+  output="$(peer chaincode query -C "$CHANNEL" -n "$CC_NAME" -c "{\"Args\":[\"GetLog\",\"$probe_key\"]}" 2>&1)"
+  local rc=$?
+  set -e
+
+  if [[ $rc -eq 0 ]]; then
+    return 0
+  fi
+
+  if grep -qiE "chaincode .* not found|connection refused|deadline exceeded|failed to connect|endorsement failure" <<<"$output"; then
+    return 1
+  fi
+
+  # Non-connectivity error means chaincode container is reachable.
+  return 0
+}
+
+wait_for_ccaas_ready() {
+  local max_attempts="${1:-20}"
+  local sleep_s="${2:-2}"
+
+  log "Waiting for CCaaS readiness (container running + peer connectivity checks)"
+  for ((i=1; i<=max_attempts; i++)); do
+    if [[ "$(docker inspect -f '{{.State.Running}}' "$CC_CONTAINER" 2>/dev/null || true)" != "true" ]]; then
+      echo "ERROR: CCaaS container '$CC_CONTAINER' is not running while waiting for readiness." >&2
+      docker logs "$CC_CONTAINER" --tail 100 || true
+      exit 1
+    fi
+
+    if probe_ccaas_via_peer; then
+      log "CCaaS is reachable by peers"
+      return 0
+    fi
+
+    echo "  (retry $i/$max_attempts) CCaaS not reachable yet..."
+    sleep "$sleep_s"
+  done
+
+  echo "ERROR: CCaaS container '$CC_CONTAINER' did not become reachable by peers in time." >&2
+  docker logs "$CC_CONTAINER" --tail 200 || true
+  exit 1
 }
 
 dns_check_from_peers() {
@@ -428,6 +484,7 @@ case "${1:-up}" in
     done
 
     run_cc_container "$pkg_id"
+    wait_for_ccaas_ready 20 2
     dns_check_from_peers
     print_usage
     ;;
