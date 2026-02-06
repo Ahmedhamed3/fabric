@@ -152,26 +152,20 @@ current_peer_has_channel() {
   peer channel list 2>/dev/null | grep -Eq "(^|[[:space:]])${CHANNEL}([[:space:]]|$)"
 }
 
+ensure_peer_joined_channel() {
+  local channel="$1"
+  peer channel list | grep -q "$channel" || {
+    echo "❌ Peer is NOT joined to channel '$channel'"
+    peer channel list
+    exit 1
+  }
+}
+
 ensure_channel_soclogs() {
-  local had_org1=0 had_org2=0
+  local fetch_ok=0
 
   need_cmd configtxgen
   mkdir -p "$CHANNEL_ARTIFACTS_DIR"
-
-  source_org1
-  if current_peer_has_channel; then
-    had_org1=1
-  fi
-
-  source_org2
-  if current_peer_has_channel; then
-    had_org2=1
-  fi
-
-  if [[ "$had_org1" -eq 1 && "$had_org2" -eq 1 ]]; then
-    log "Channel $CHANNEL already joined on Org1 and Org2 peers"
-    return 0
-  fi
 
   if [[ ! -f "$CHANNEL_TX_FILE" ]]; then
     log "Generating create-channel transaction for $CHANNEL (profile $CHANNEL_PROFILE)"
@@ -191,8 +185,11 @@ ensure_channel_soclogs() {
     --ordererTLSHostnameOverride orderer.example.com \
     -c "$CHANNEL" \
     --tls --cafile "$ORDERER_CA" >/dev/null 2>&1; then
+    fetch_ok=1
     log "Channel $CHANNEL already exists on the orderer"
-  else
+  fi
+
+  if [[ "$fetch_ok" -eq 0 ]]; then
     log "Creating channel $CHANNEL"
     source_org1
     peer channel create \
@@ -202,6 +199,15 @@ ensure_channel_soclogs() {
       -f "$CHANNEL_TX_FILE" \
       --outputBlock "$CHANNEL_BLOCK_FILE" \
       --tls --cafile "$ORDERER_CA"
+
+    if ! peer channel fetch 0 "$CHANNEL_BLOCK_FILE" \
+      -o orderer.example.com:7050 \
+      --ordererTLSHostnameOverride orderer.example.com \
+      -c "$CHANNEL" \
+      --tls --cafile "$ORDERER_CA" >/dev/null 2>&1; then
+      echo "ERROR: channel '$CHANNEL' was not fetchable after creation." >&2
+      exit 1
+    fi
   fi
 
   source_org1
@@ -220,6 +226,11 @@ ensure_channel_soclogs() {
     peer channel join -b "$CHANNEL_BLOCK_FILE"
   fi
 
+  log "Re-checking channel membership on both peers"
+  source_org1
+  ensure_peer_joined_channel "$CHANNEL"
+  source_org2
+  ensure_peer_joined_channel "$CHANNEL"
   source_org1
 }
 
@@ -278,10 +289,13 @@ ensure_chaincode_lifecycle() {
   fi
 
   source_org1
+  ensure_peer_joined_channel "$CHANNEL"
   org1_tls_rootcert="$CORE_PEER_TLS_ROOTCERT_FILE"
   source_org2
+  ensure_peer_joined_channel "$CHANNEL"
   org2_tls_rootcert="$CORE_PEER_TLS_ROOTCERT_FILE"
   source_org1
+  ensure_peer_joined_channel "$CHANNEL"
 
   if ! is_committed; then
     log "Committing chaincode definition on channel $CHANNEL"
@@ -335,6 +349,7 @@ run_cc_container() {
 probe_ccaas_via_peer() {
   local probe_key="__ccaas_probe__"
   source_org1
+  ensure_peer_joined_channel "$CHANNEL"
   set +e
   local output
   output="$(peer chaincode query -C "$CHANNEL" -n "$CC_NAME" -c "{\"Args\":[\"GetLog\",\"$probe_key\"]}" 2>&1)"
@@ -358,6 +373,8 @@ wait_for_ccaas_ready() {
   local sleep_s="${2:-2}"
 
   log "Waiting for CCaaS readiness (container running + peer connectivity checks)"
+  source_org1
+  ensure_peer_joined_channel "$CHANNEL"
   for ((i=1; i<=max_attempts; i++)); do
     if [[ "$(docker inspect -f '{{.State.Running}}' "$CC_CONTAINER" 2>/dev/null || true)" != "true" ]]; then
       echo "ERROR: CCaaS container '$CC_CONTAINER' is not running while waiting for readiness." >&2
@@ -420,6 +437,7 @@ PY
 )
 
   source_org1
+  ensure_peer_joined_channel "$CHANNEL"
   peer chaincode invoke \
     -o orderer.example.com:7050 \
     --ordererTLSHostnameOverride orderer.example.com \
@@ -445,6 +463,7 @@ PY
 )
 
   source_org1
+  ensure_peer_joined_channel "$CHANNEL"
   peer chaincode query -C "$CHANNEL" -n "$CC_NAME" -c "$args_json"
 }
 
