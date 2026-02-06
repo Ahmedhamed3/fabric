@@ -70,13 +70,6 @@ start_fabric() {
   docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Networks}}\t{{.Ports}}" | egrep "orderer\.example\.com|peer0\.org1\.example\.com|peer0\.org2\.example\.com" || true
 }
 
-ensure_network() {
-  if ! docker network ls --format '{{.Name}}' | grep -qx "$NETWORK"; then
-    log "Creating Docker network: $NETWORK"
-    docker network create "$NETWORK"
-  fi
-}
-
 source_org1() {
   export PATH=/opt/fabric-dev/bin:$PATH
   # shellcheck disable=SC1090
@@ -208,18 +201,16 @@ need_cmd python3
 
 case "${1:-up}" in
   up)
-    log "Step 1/5: validating local host mappings"
+    log "Step 1/4: validating local host mappings"
     ensure_hosts
-    log "Step 2/5: ensuring Docker network exists"
-    ensure_network
-    log "Step 3/5: starting Fabric containers"
+    log "Step 2/4: starting Fabric containers (Compose-managed network)"
     start_fabric
     # You need peer CLI env to read package id; if peers are not ready yet, this might fail.
     # We'll try a few times.
-    log "Step 4/5: building chaincode service image"
+    log "Step 3/4: building chaincode service image"
     build_cc_image
 
-    log "Step 5/5: detecting Package ID for label: $CC_LABEL"
+    log "Step 4/4: detecting Package ID for label: $CC_LABEL"
     pkg_id=""
     for i in 1 2 3 4 5; do
       pkg_id="$(get_pkg_id || true)"
