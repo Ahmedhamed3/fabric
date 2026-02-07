@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# NOTE: keep this script executable (chmod +x socnet/start_socnet.sh).
 
 if [ -z "${BASH_VERSION:-}" ]; then
   echo "ERROR: this script must be run with bash (e.g. ./socnet/start_socnet.sh)." >&2
@@ -75,6 +76,25 @@ set_peer_org2() {
 fatal() {
   echo "ERROR: $*" >&2
   exit 1
+}
+
+port_is_listening() {
+  local port="$1"
+  local port_hex
+  local file
+  local found="false"
+
+  printf -v port_hex '%04X' "$port"
+
+  for file in /proc/net/tcp /proc/net/tcp6; do
+    [[ -r "$file" ]] || continue
+    if awk -v port_hex=":${port_hex}" '$4 == "0A" && $2 ~ port_hex {found=1; exit} END {exit !found}' "$file"; then
+      found="true"
+      break
+    fi
+  done
+
+  [[ "$found" == "true" ]]
 }
 
 need_cmd() {
@@ -227,12 +247,7 @@ ensure_channel_soclogs() {
   log "Waiting for orderer admin API readiness on :7053"
   local admin_ready="false"
   for ((i=1; i<=admin_ready_attempts; i++)); do
-    if osnadmin channel list \
-      -o orderer.example.com:7053 \
-      --ca-file /tmp/orderer-admin-ca.crt \
-      --client-cert /tmp/orderer-admin-client.crt \
-      --client-key /tmp/orderer-admin-client.key \
-      >/tmp/orderer-admin-channels.txt 2>/dev/null; then
+    if port_is_listening 7053; then
       admin_ready="true"
       break
     fi
@@ -244,7 +259,13 @@ ensure_channel_soclogs() {
     fatal "orderer admin API did not become ready on :7053 in time"
   fi
 
-  if grep -q "$CHANNEL" /tmp/orderer-admin-channels.txt; then
+  if osnadmin channel list \
+    -o orderer.example.com:7053 \
+    --ca-file /tmp/orderer-admin-ca.crt \
+    --client-cert /tmp/orderer-admin-client.crt \
+    --client-key /tmp/orderer-admin-client.key \
+    >/tmp/orderer-admin-channels.txt 2>/dev/null \
+    && grep -q "$CHANNEL" /tmp/orderer-admin-channels.txt; then
     log "[OK] Orderer already joined (channel '$CHANNEL' exists)"
   else
     log "[INFO] Joining orderer to $CHANNEL"
