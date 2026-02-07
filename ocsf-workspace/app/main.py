@@ -1,6 +1,7 @@
 import asyncio
 import contextlib
 import json
+import logging
 import urllib.parse
 import urllib.request
 import os
@@ -77,31 +78,73 @@ app = FastAPI(
 connector_manager = ConnectorManager()
 bundle_manager = TimeWindowBundler(window_minutes=5)
 bundle_flush_task: Optional[asyncio.Task] = None
+if not logging.getLogger().handlers:
+    logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+
+def _build_evidence_payload(bundle: Any) -> Dict[str, Any]:
+    manifest = bundle.manifest
+    source = manifest.get("source") or {}
+    hashes = manifest.get("hashes") or {}
+    time_window = manifest.get("time_window") or {}
+    return {
+        "bundle_manifest": {
+            "source": {
+                "type": source.get("type"),
+                "product": source.get("product"),
+            },
+            "hashes": {
+                "raw_bundle": {
+                    "sha256": (hashes.get("raw_bundle") or {}).get("sha256"),
+                },
+                "ocsf_bundle": {
+                    "sha256": (hashes.get("ocsf_bundle") or {}).get("sha256"),
+                },
+            },
+            "time_window": {
+                "start_utc": time_window.get("start_utc"),
+                "end_utc": time_window.get("end_utc"),
+            },
+        },
+        "ocsf_bundle_ndjson": bundle.ocsf_ndjson,
+    }
+
+
+def _post_bundle_sync(payload: Dict[str, Any], evidence_api_url: str, bundle_id: str) -> None:
+    request = urllib.request.Request(
+        evidence_api_url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=15):
+        logger.info("Evidence API commit succeeded for bundle_id=%s", bundle_id)
+
+
+async def _post_bundle_async(payload: Dict[str, Any], evidence_api_url: str, bundle_id: str) -> None:
+    try:
+        await asyncio.to_thread(_post_bundle_sync, payload, evidence_api_url, bundle_id)
+    except Exception as exc:
+        logger.warning("Evidence API commit failed for bundle_id=%s: %s", bundle_id, exc)
 
 
 async def _flush_bundle_loop() -> None:
-    evidence_api_base = os.getenv("EVIDENCE_API_BASE", "http://127.0.0.1:4100")
+    evidence_api_url = os.getenv(
+        "EVIDENCE_API_URL",
+        "http://localhost:4100/api/v1/evidence/commit-bundle",
+    ).strip()
+    evidence_api_enabled = bool(evidence_api_url)
+    if not evidence_api_enabled:
+        logger.info("Evidence API disabled; set EVIDENCE_API_URL to enable.")
     while True:
         await asyncio.sleep(1)
         ready = bundle_manager.flush_ready()
+        if not evidence_api_enabled:
+            continue
         for bundle in ready:
-            payload = {
-                "bundle_id": bundle.bundle_id,
-                "raw_bundle_ndjson": bundle.raw_ndjson,
-                "ocsf_bundle_ndjson": bundle.ocsf_ndjson,
-                "bundle_manifest": bundle.manifest,
-            }
-            request = urllib.request.Request(
-                f"{evidence_api_base}/api/v1/evidence/commit-bundle",
-                data=json.dumps(payload).encode("utf-8"),
-                headers={"Content-Type": "application/json"},
-                method="POST",
-            )
-            try:
-                with urllib.request.urlopen(request, timeout=15):
-                    pass
-            except Exception:
-                continue
+            payload = _build_evidence_payload(bundle)
+            asyncio.create_task(_post_bundle_async(payload, evidence_api_url, bundle.bundle_id))
 
 
 def _queue_event_for_bundle(raw_envelope: Dict[str, Any], ocsf_event: Optional[Dict[str, Any]]) -> None:
