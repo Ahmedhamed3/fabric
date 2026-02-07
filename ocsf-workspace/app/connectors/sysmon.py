@@ -17,7 +17,7 @@ from app.normalizers.sysmon_to_ocsf.io_ndjson import class_path_for_event
 from app.normalizers.sysmon_to_ocsf.mapper import MappingContext, map_raw_event
 from app.utils.checkpoint import Checkpoint, load_checkpoint, save_checkpoint
 from app.utils.dedupe_cache import DedupeCache, load_dedupe_cache, save_dedupe_cache
-from app.utils.evidence_emission import emit_evidence_metadata_for_event
+from app.utils.evidence_emission import emit_evidence_metadata_for_event, ensure_evidence_api_url
 from app.utils.http_status import HttpStatusServer, StatusState, tail_ndjson
 from app.utils.ndjson_writer import append_ndjson
 from app.utils.ocsf_schema_loader import get_ocsf_schema_loader
@@ -105,6 +105,7 @@ class SysmonConnector:
         return events
 
     def run_forever(self, poll_seconds: int, max_events: int, http_port: int | None) -> None:
+        ensure_evidence_api_url()
         checkpoint = load_checkpoint(CHECKPOINT_PATH)
         status_state = StatusState(
             hostname=self.hostname,
