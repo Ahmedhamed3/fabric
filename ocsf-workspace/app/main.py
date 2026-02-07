@@ -2,6 +2,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import sys
 import urllib.parse
 import urllib.request
 import os
@@ -76,14 +77,31 @@ app = FastAPI(
 )
 
 connector_manager = ConnectorManager()
-fast_flush_enabled = os.getenv("OCSF_DEV_FAST_FLUSH", "").strip().lower() in {"1", "true", "yes", "on"}
-bundle_window_seconds = os.getenv("OCSF_BUNDLE_WINDOW_SECONDS")
-bundle_max_events = os.getenv("OCSF_BUNDLE_MAX_EVENTS")
-bundle_manager = TimeWindowBundler(
-    window_minutes=5,
-    window_seconds=int(bundle_window_seconds) if bundle_window_seconds else (10 if fast_flush_enabled else None),
-    max_events=int(bundle_max_events) if bundle_max_events else (100 if fast_flush_enabled else None),
-)
+
+
+def _detect_dev_mode() -> tuple[bool, str]:
+    if "uvicorn" in sys.modules and "--reload" in sys.argv:
+        return True, "uvicorn --reload"
+    if "--reload" in sys.argv:
+        return True, "sys.argv --reload"
+    if os.getenv("RUN_MAIN"):
+        return True, "RUN_MAIN"
+    return False, "production"
+
+
+def _build_bundle_manager(dev_mode: bool) -> TimeWindowBundler:
+    bundle_window_seconds = os.getenv("OCSF_BUNDLE_WINDOW_SECONDS")
+    bundle_max_events = os.getenv("OCSF_BUNDLE_MAX_EVENTS")
+    window_seconds = int(bundle_window_seconds) if bundle_window_seconds else (10 if dev_mode else None)
+    max_events = int(bundle_max_events) if bundle_max_events else (50 if dev_mode else None)
+    return TimeWindowBundler(
+        window_minutes=5,
+        window_seconds=window_seconds,
+        max_events=max_events,
+    )
+
+
+bundle_manager = _build_bundle_manager(dev_mode=False)
 bundle_flush_task: Optional[asyncio.Task] = None
 if not logging.getLogger().handlers:
     logging.basicConfig(level=logging.INFO)
@@ -190,7 +208,13 @@ def _queue_event_for_bundle(raw_envelope: Dict[str, Any], ocsf_event: Optional[D
 
 @app.on_event("startup")
 async def startup_connectors() -> None:
-    global bundle_flush_task
+    global bundle_flush_task, bundle_manager
+    dev_mode, dev_reason = _detect_dev_mode()
+    bundle_manager = _build_bundle_manager(dev_mode=dev_mode)
+    if dev_mode:
+        logger.info("[OCSF] Dev mode detected (%s) → fast flush enabled", dev_reason)
+    else:
+        logger.info("[OCSF] Production mode → default bundling")
     await asyncio.to_thread(connector_manager.startup)
     bundle_flush_task = asyncio.create_task(_flush_bundle_loop())
 
