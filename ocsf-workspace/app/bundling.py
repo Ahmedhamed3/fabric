@@ -33,6 +33,14 @@ def floor_to_window(value: datetime, window_minutes: int) -> datetime:
     return value.replace(minute=minute, second=0, microsecond=0)
 
 
+def floor_to_window_seconds(value: datetime, window_seconds: int) -> datetime:
+    if window_seconds <= 0:
+        window_seconds = 1
+    timestamp = int(value.timestamp())
+    floored = (timestamp // window_seconds) * window_seconds
+    return datetime.fromtimestamp(floored, tz=timezone.utc)
+
+
 def canonical_json(value: Any) -> str:
     return json.dumps(value, separators=(",", ":"), sort_keys=True, ensure_ascii=False)
 
@@ -50,8 +58,16 @@ class BundleFlushResult:
 
 
 class TimeWindowBundler:
-    def __init__(self, window_minutes: int = 5) -> None:
+    def __init__(
+        self,
+        window_minutes: int = 5,
+        *,
+        window_seconds: Optional[int] = None,
+        max_events: Optional[int] = None,
+    ) -> None:
         self.window_minutes = window_minutes
+        self.window_seconds = window_seconds
+        self.max_events = max_events
         self._windows: Dict[Tuple[str, str, datetime], Dict[str, Any]] = {}
 
     def add_event(
@@ -65,7 +81,12 @@ class TimeWindowBundler:
         host = str(source.get("host") or "unknown-host")
         source_type = str(source.get("type") or "unknown-source")
         event_time = parse_utc(event_time_utc) or parse_utc(ocsf_event.get("time")) or utc_now()
-        window_start = floor_to_window(event_time, self.window_minutes)
+        if self.window_seconds:
+            window_start = floor_to_window_seconds(event_time, self.window_seconds)
+            window_end = window_start + timedelta(seconds=self.window_seconds)
+        else:
+            window_start = floor_to_window(event_time, self.window_minutes)
+            window_end = window_start + timedelta(minutes=self.window_minutes)
         key = (host, source_type, window_start)
 
         if key not in self._windows:
@@ -75,7 +96,7 @@ class TimeWindowBundler:
                 "class_uid_counts": {},
                 "source": source,
                 "window_start": window_start,
-                "window_end": window_start + timedelta(minutes=self.window_minutes),
+                "window_end": window_end,
             }
 
         slot = self._windows[key]
@@ -83,6 +104,8 @@ class TimeWindowBundler:
         slot["ocsf"].append(ocsf_event)
         class_uid = str(ocsf_event.get("class_uid") or "unknown")
         slot["class_uid_counts"][class_uid] = slot["class_uid_counts"].get(class_uid, 0) + 1
+        if self.max_events and len(slot["ocsf"]) >= self.max_events:
+            slot["window_end"] = utc_now()
 
     def flush_ready(self, now: Optional[datetime] = None) -> List[BundleFlushResult]:
         current = now or utc_now()
@@ -110,6 +133,10 @@ class TimeWindowBundler:
             ocsf_hash,
         ]))
 
+        if self.window_seconds:
+            bundle_strategy = f"time_window_{self.window_seconds}s"
+        else:
+            bundle_strategy = f"time_window_{self.window_minutes}m"
         manifest = {
             "bundle_id": bundle_id,
             "bundle_type": "ocsf_log_bundle",
@@ -150,7 +177,7 @@ class TimeWindowBundler:
             "integrity": {
                 "hash_algorithm": "SHA-256",
                 "canonicalization": "rfc8785",
-                "bundle_strategy": "time_window_5m",
+                "bundle_strategy": bundle_strategy,
                 "created_utc": utc_iso(utc_now()),
             },
         }
