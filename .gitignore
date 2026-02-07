@@ -1,9 +1,12 @@
-@"
-# Fabric binaries (DON'T push these)
+# =========================
+# Hyperledger Fabric (DO NOT COMMIT)
+# =========================
+
+# Fabric binaries & builders (local only)
 bin/
 builders/
 
-# Generated runtime data
+# Fabric runtime data
 production/
 var/
 tmp/
@@ -19,13 +22,40 @@ tmp/
 **/*.tgz
 **/*.tar.gz
 
-# Node
+# Local Fabric tools (avoid duplication in repo)
+tools/fabric-samples
+tools-fabric-3/fabric-samples
+
+
+# =========================
+# Runtime / Logs
+# =========================
+
+.run/
+*.log
+*.tmp
+*.bak
+
+
+# =========================
+# Node.js (Evidence API, Fabric UI)
+# =========================
+
 node_modules/
-"@ | Out-File -Encoding utf8 .gitignore
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Fabric UI build outputs
+fabric-ui/**/dist/
+fabric-ui/**/.vite/
+fabric-ui/**/node_modules/
+
 
 # =========================
 # Python / OCSF Workspace
 # =========================
+
 __pycache__/
 *.pyc
 *.pyo
@@ -33,30 +63,43 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 
-# OCSF runtime outputs (logs, evidence, checkpoints)
+# OCSF runtime outputs
 ocsf-workspace/out/
 ocsf-workspace/state/
 
-# Local virtual environments
+# Python virtual environments
 venv/
 .venv/
 
-# Nested schema repo (keep local only)
+# Nested OCSF schema repo (local only)
 ocsf-workspace/ocsf-schema/
 
 
 # =========================
-# OS / Editor
+# Environment / Secrets
 # =========================
+
+.env
+.env.*
+*.secret
+
+
+# =========================
+# Docker (optional local data)
+# =========================
+
+docker-data/
+docker-volumes/
+
+
+# =========================
+# OS / Editor / IDE
+# =========================
+
 .DS_Store
 Thumbs.db
 *.swp
 *.swo
+
 .vscode/
 .idea/
-
-
-# WSL / Windows filesystem junk
-*.lnk
-tools/fabric-samples
-tools-fabric-3/fabric-samples
