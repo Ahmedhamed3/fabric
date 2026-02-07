@@ -1,5 +1,4 @@
 import asyncio
-import contextlib
 import json
 import logging
 import sys
@@ -67,7 +66,6 @@ from app.normalizers.windows_security_to_ocsf.mapper import (
 from app.utils.http_status import tail_ndjson
 from app.utils.evidence_hashing import apply_evidence_hashing
 from app.utils.timeutil import utc_now_iso
-from app.bundling import TimeWindowBundler
 
 app = FastAPI(
     title="Log → OCSF Converter (MVP)",
@@ -87,146 +85,21 @@ def _detect_dev_mode() -> tuple[bool, str]:
     if os.getenv("RUN_MAIN"):
         return True, "RUN_MAIN"
     return False, "production"
-
-
-def _build_bundle_manager(dev_mode: bool) -> TimeWindowBundler:
-    bundle_window_seconds = os.getenv("OCSF_BUNDLE_WINDOW_SECONDS")
-    bundle_max_events = os.getenv("OCSF_BUNDLE_MAX_EVENTS")
-    window_seconds = int(bundle_window_seconds) if bundle_window_seconds else (10 if dev_mode else None)
-    max_events = int(bundle_max_events) if bundle_max_events else (50 if dev_mode else None)
-    return TimeWindowBundler(
-        window_minutes=5,
-        window_seconds=window_seconds,
-        max_events=max_events,
-    )
-
-
-bundle_manager = _build_bundle_manager(dev_mode=False)
-bundle_flush_task: Optional[asyncio.Task] = None
 if not logging.getLogger().handlers:
     logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-def _build_evidence_payload(bundle: Any) -> Dict[str, Any]:
-    manifest = bundle.manifest
-    source = manifest.get("source") or {}
-    hashes = manifest.get("hashes") or {}
-    time_window = manifest.get("time_window") or {}
-    return {
-        "bundle_manifest": {
-            "source": {
-                "type": source.get("type"),
-                "product": source.get("product"),
-            },
-            "hashes": {
-                "raw_bundle": {
-                    "sha256": (hashes.get("raw_bundle") or {}).get("sha256"),
-                },
-                "ocsf_bundle": {
-                    "sha256": (hashes.get("ocsf_bundle") or {}).get("sha256"),
-                },
-            },
-            "time_window": {
-                "start_utc": time_window.get("start_utc"),
-                "end_utc": time_window.get("end_utc"),
-            },
-        },
-        "ocsf_bundle_ndjson": bundle.ocsf_ndjson,
-    }
-
-
-def _post_bundle_sync(payload: Dict[str, Any], evidence_api_url: str, bundle_id: str) -> None:
-    request = urllib.request.Request(
-        evidence_api_url,
-        data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    with urllib.request.urlopen(request, timeout=15):
-        logger.info("Evidence API commit succeeded for bundle_id=%s", bundle_id)
-
-
-async def _post_bundle_async(payload: Dict[str, Any], evidence_api_url: str, bundle_id: str) -> None:
-    try:
-        await asyncio.to_thread(_post_bundle_sync, payload, evidence_api_url, bundle_id)
-    except Exception as exc:
-        logger.warning("Evidence API commit failed for bundle_id=%s: %s", bundle_id, exc)
-
-
-async def _flush_bundle_loop() -> None:
-    evidence_api_url = os.getenv(
-        "EVIDENCE_API_URL",
-        "http://localhost:4100/api/v1/evidence/commit-bundle",
-    ).strip()
-    evidence_api_enabled = bool(evidence_api_url)
-    if not evidence_api_enabled:
-        logger.info("Evidence API disabled; set EVIDENCE_API_URL to enable.")
-    while True:
-        await asyncio.sleep(1)
-        ready = bundle_manager.flush_ready()
-        for bundle in ready:
-            source_type = (bundle.manifest.get("source") or {}).get("type")
-            event_count = (bundle.manifest.get("event_count"))
-            logger.info(
-                "[bundle] flushed bundle_id=%s events=%s source=%s",
-                bundle.bundle_id,
-                event_count,
-                source_type,
-            )
-            if not evidence_api_enabled:
-                continue
-            payload = _build_evidence_payload(bundle)
-            asyncio.create_task(_post_bundle_async(payload, evidence_api_url, bundle.bundle_id))
-
-
-def _queue_event_for_bundle(raw_envelope: Dict[str, Any], ocsf_event: Optional[Dict[str, Any]]) -> None:
-    if not ocsf_event:
-        return
-    source = raw_envelope.get("source") or {}
-    collector = source.get("collector") or {}
-    source_meta = {
-        "type": source.get("type"),
-        "vendor": source.get("vendor"),
-        "product": source.get("product"),
-        "channel": source.get("channel"),
-        "host": collector.get("host"),
-        "collector": {
-            "name": collector.get("name"),
-            "instance_id": collector.get("instance_id"),
-        },
-        "ocsf_version": (ocsf_event.get("metadata") or {}).get("version"),
-    }
-    event_time = ((raw_envelope.get("event") or {}).get("time") or {}).get("observed_utc")
-    bundle_manager.add_event(
-        raw_envelope=raw_envelope,
-        ocsf_event=ocsf_event,
-        source=source_meta,
-        event_time_utc=event_time,
-    )
-
-
 @app.on_event("startup")
 async def startup_connectors() -> None:
-    global bundle_flush_task, bundle_manager
     dev_mode, dev_reason = _detect_dev_mode()
-    bundle_manager = _build_bundle_manager(dev_mode=dev_mode)
     if dev_mode:
-        logger.info("[OCSF] Dev mode detected (%s) → fast flush enabled", dev_reason)
-    else:
-        logger.info("[OCSF] Production mode → default bundling")
+        logger.info("[OCSF] Dev mode detected (%s)", dev_reason)
     await asyncio.to_thread(connector_manager.startup)
-    bundle_flush_task = asyncio.create_task(_flush_bundle_loop())
 
 
 @app.on_event("shutdown")
 async def shutdown_connectors() -> None:
-    global bundle_flush_task
-    if bundle_flush_task is not None:
-        bundle_flush_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await bundle_flush_task
-        bundle_flush_task = None
     await asyncio.to_thread(connector_manager.shutdown)
 
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
@@ -1986,7 +1859,6 @@ async def pipeline_event(source: str, key: str):
     original = _extract_original_payload(matched, source_key)
     if source_key == "sysmon":
         payload = _build_sysmon_ocsf_payload(matched)
-        _queue_event_for_bundle(matched, payload["ocsf_event"])
         return JSONResponse(
             {
                 "source": source_key,
@@ -1998,7 +1870,6 @@ async def pipeline_event(source: str, key: str):
         )
     if source_key == "security":
         payload = _build_security_ocsf_payload(matched)
-        _queue_event_for_bundle(matched, payload["ocsf_event"])
         return JSONResponse(
             {
                 "source": source_key,
@@ -2009,7 +1880,6 @@ async def pipeline_event(source: str, key: str):
             }
         )
     payload = _build_elastic_ocsf_payload(matched)
-    _queue_event_for_bundle(matched, payload["ocsf_event"])
     return JSONResponse(
         {
             "source": source_key,

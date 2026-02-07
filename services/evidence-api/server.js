@@ -126,6 +126,50 @@ app.post("/api/v1/evidence/commit-bundle", async (req, res) => {
   return res.status(200).json({ status: "ok" });
 });
 
+app.post("/api/v1/evidence/events", async (req, res) => {
+  const payload = req.body;
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return res.status(400).json({ error: "body must be a JSON object" });
+  }
+
+  const eventMeta = {
+    evidence_id: payload?.evidence_id || null,
+    source: {
+      type: payload?.source?.type || null,
+      vendor: payload?.source?.vendor || null,
+      product: payload?.source?.product || null,
+      channel: payload?.source?.channel || null,
+    },
+    timestamps: {
+      observed_utc: toUtcIso(payload?.timestamps?.observed_utc),
+    },
+    ocsf: {
+      class_uid: payload?.ocsf?.class_uid || null,
+      type_uid: payload?.ocsf?.type_uid || null,
+    },
+    hashes: {
+      raw_envelope_hash: payload?.hashes?.raw_envelope_hash || null,
+      raw_payload_hash: payload?.hashes?.raw_payload_hash || null,
+      ocsf_hash: payload?.hashes?.ocsf_hash || null,
+    },
+    linkage: {
+      record_id: payload?.linkage?.record_id || null,
+      dedupe_hash: payload?.linkage?.dedupe_hash || null,
+    },
+  };
+
+  addToBuffer(eventMeta);
+  stats.totalEvents += 1;
+  const sourceKey = normalizeSourceKey(eventMeta.source);
+  stats.eventsBySource.set(sourceKey, (stats.eventsBySource.get(sourceKey) || 0) + 1);
+  if (eventMeta.timestamps.observed_utc) {
+    stats.lastEventBySource.set(sourceKey, eventMeta.timestamps.observed_utc);
+  }
+
+  console.log(`[EVIDENCE-API] event received evidence_id=${eventMeta.evidence_id || "unknown"} source=${sourceKey}`);
+  return res.status(200).json({ status: "ok" });
+});
+
 app.get("/api/v1/evidence/events", (req, res) => {
   const limit = Math.max(1, Number(req.query.limit || EVENT_BUFFER_SIZE));
   const startIndex = Math.max(0, eventBuffer.length - Math.min(limit, EVENT_BUFFER_SIZE));

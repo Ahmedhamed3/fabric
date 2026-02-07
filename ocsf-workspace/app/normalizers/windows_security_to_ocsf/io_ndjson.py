@@ -13,6 +13,7 @@ from app.normalizers.windows_security_to_ocsf.mapper import (
     missing_required_fields,
 )
 from app.utils.evidence_hashing import apply_evidence_hashing
+from app.utils.evidence_metadata import emit_evidence_metadata
 
 
 def read_raw_events(path: Path) -> Iterator[Dict[str, Any]]:
@@ -54,6 +55,7 @@ def convert_events(
                     )
                     ocsf_event = hash_result.ocsf_event
                     evidence_commit = hash_result.evidence_commit
+                    emit_evidence_metadata(evidence_commit)
             else:
                 supported = False
                 ocsf_event = None
