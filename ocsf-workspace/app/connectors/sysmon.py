@@ -13,10 +13,14 @@ from pathlib import Path
 from typing import Any
 from xml.etree import ElementTree
 
+from app.normalizers.sysmon_to_ocsf.io_ndjson import class_path_for_event
+from app.normalizers.sysmon_to_ocsf.mapper import MappingContext, map_raw_event
 from app.utils.checkpoint import Checkpoint, load_checkpoint, save_checkpoint
 from app.utils.dedupe_cache import DedupeCache, load_dedupe_cache, save_dedupe_cache
+from app.utils.evidence_emission import emit_evidence_metadata_for_event
 from app.utils.http_status import HttpStatusServer, StatusState, tail_ndjson
 from app.utils.ndjson_writer import append_ndjson
+from app.utils.ocsf_schema_loader import get_ocsf_schema_loader
 from app.utils.pathing import build_output_paths
 from app.utils.timeutil import to_utc_iso, utc_now_iso
 
@@ -158,6 +162,8 @@ class SysmonConnector:
         output_path = self._output_paths.daily_events_path()
         cache = self._ensure_dedupe_cache(output_path)
         deduped_events = self._apply_dedupe(events, cache)
+        for event in deduped_events:
+            self._emit_evidence_metadata(event)
         written = append_ndjson(output_path, deduped_events)
         self._persist_dedupe_cache(cache)
         for event in deduped_events:
@@ -195,6 +201,24 @@ class SysmonConnector:
             cache.add(dedupe_hash)
             deduped.append(event)
         return deduped
+
+    def _emit_evidence_metadata(self, raw_event: dict) -> None:
+        try:
+            schema_loader = get_ocsf_schema_loader()
+            context = MappingContext(ocsf_version=schema_loader.version)
+            ocsf_event = map_raw_event(raw_event, context)
+            if ocsf_event is None:
+                return
+            class_path = class_path_for_event(ocsf_event)
+            emit_evidence_metadata_for_event(
+                raw_event,
+                ocsf_event,
+                ocsf_schema=class_path,
+                ocsf_version=context.ocsf_version,
+                log=log,
+            )
+        except Exception as exc:  # noqa: BLE001
+            log(f"[EVIDENCE-META] failed to build metadata: {exc}")
 
 
 def parse_event_xml(xml: str, hostname: str) -> dict[str, Any] | None:

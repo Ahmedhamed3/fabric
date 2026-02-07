@@ -15,9 +15,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
+from app.normalizers.elastic_to_ocsf.io_ndjson import class_path_for_event
+from app.normalizers.elastic_to_ocsf.mapper import MappingContext, map_raw_event
 from app.utils.checkpoint import ElasticCheckpoint, load_elastic_checkpoint, save_elastic_checkpoint
+from app.utils.evidence_emission import emit_evidence_metadata_for_event
 from app.utils.http_status import HttpStatusServer, tail_ndjson
 from app.utils.ndjson_writer import append_ndjson
+from app.utils.ocsf_schema_loader import get_ocsf_schema_loader
 from app.utils.pathing import build_elastic_output_path
 from app.utils.raw_envelope import build_elastic_raw_event, local_timezone_name
 from app.utils.timeutil import to_utc_iso, utc_now_iso
@@ -124,6 +128,8 @@ class ElasticConnector:
                     hits, next_checkpoint = self.fetch_new_events(checkpoint, max_events)
                     if hits:
                         records = list(self._format_records(hits))
+                        for record in records:
+                            self._emit_evidence_metadata(record)
                         written = self._write_records(records)
                         for record in records[-DEFAULT_TAIL_SIZE:]:
                             self.tail_buffer.append(record)
@@ -328,6 +334,24 @@ class ElasticConnector:
         for path, batch in grouped.items():
             written += append_ndjson(path, batch)
         return written
+
+    def _emit_evidence_metadata(self, raw_event: dict) -> None:
+        try:
+            schema_loader = get_ocsf_schema_loader()
+            context = MappingContext(ocsf_version=schema_loader.version)
+            ocsf_event = map_raw_event(raw_event, context)
+            if ocsf_event is None:
+                return
+            class_path = class_path_for_event(ocsf_event)
+            emit_evidence_metadata_for_event(
+                raw_event,
+                ocsf_event,
+                ocsf_schema=class_path,
+                ocsf_version=context.ocsf_version,
+                log=log,
+            )
+        except Exception as exc:  # noqa: BLE001
+            log(f"[EVIDENCE-META] failed to build metadata: {exc}")
 
 
 def build_elastic_query(
