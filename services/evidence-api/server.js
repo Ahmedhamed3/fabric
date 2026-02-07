@@ -20,6 +20,7 @@ const invokeScript = process.env.FABRIC_INVOKE_SCRIPT || path.join(repoRoot, "so
 const healthScript = process.env.FABRIC_HEALTH_SCRIPT || path.join(repoRoot, "socnet", "scripts", "fabric_health_check.sh");
 
 const inMemoryIndex = new Map();
+const ocsfEvents = [];
 let db;
 
 function initDb() {
@@ -336,9 +337,28 @@ app.get("/api/v1/evidence/fabric/health", async (req, res) => {
 });
 
 app.post("/api/v1/evidence/commit-bundle", async (req, res) => {
-  console.log("[EVIDENCE-API] commit-bundle received");
-  console.log(JSON.stringify(req.body ?? {}, null, 2));
+  const payload = req.body;
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return res.status(400).json({ error: "body must be a JSON object" });
+  }
+
+  const event = {
+    source: payload?.source ?? null,
+    received_at: new Date().toISOString(),
+    raw: payload,
+  };
+
+  ocsfEvents.push(event);
+  console.log(`[EVIDENCE-API] commit-bundle stored (total=${ocsfEvents.length})`);
+
   return res.status(200).json({ status: "ok" });
+});
+
+app.get("/api/v1/evidence/events", (req, res) => {
+  const limit = Math.max(1, Number(req.query.limit || 50));
+  const startIndex = Math.max(0, ocsfEvents.length - limit);
+  const items = ocsfEvents.slice(startIndex);
+  return res.json({ items, total: ocsfEvents.length, limit });
 });
 
 app.get("/api/v1/evidence/bundles", (req, res) => {
