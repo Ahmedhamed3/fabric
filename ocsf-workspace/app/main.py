@@ -76,7 +76,14 @@ app = FastAPI(
 )
 
 connector_manager = ConnectorManager()
-bundle_manager = TimeWindowBundler(window_minutes=5)
+fast_flush_enabled = os.getenv("OCSF_DEV_FAST_FLUSH", "").strip().lower() in {"1", "true", "yes", "on"}
+bundle_window_seconds = os.getenv("OCSF_BUNDLE_WINDOW_SECONDS")
+bundle_max_events = os.getenv("OCSF_BUNDLE_MAX_EVENTS")
+bundle_manager = TimeWindowBundler(
+    window_minutes=5,
+    window_seconds=int(bundle_window_seconds) if bundle_window_seconds else (10 if fast_flush_enabled else None),
+    max_events=int(bundle_max_events) if bundle_max_events else (100 if fast_flush_enabled else None),
+)
 bundle_flush_task: Optional[asyncio.Task] = None
 if not logging.getLogger().handlers:
     logging.basicConfig(level=logging.INFO)
@@ -140,9 +147,17 @@ async def _flush_bundle_loop() -> None:
     while True:
         await asyncio.sleep(1)
         ready = bundle_manager.flush_ready()
-        if not evidence_api_enabled:
-            continue
         for bundle in ready:
+            source_type = (bundle.manifest.get("source") or {}).get("type")
+            event_count = (bundle.manifest.get("event_count"))
+            logger.info(
+                "[bundle] flushed bundle_id=%s events=%s source=%s",
+                bundle.bundle_id,
+                event_count,
+                source_type,
+            )
+            if not evidence_api_enabled:
+                continue
             payload = _build_evidence_payload(bundle)
             asyncio.create_task(_post_bundle_async(payload, evidence_api_url, bundle.bundle_id))
 
