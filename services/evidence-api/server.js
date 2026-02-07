@@ -336,60 +336,9 @@ app.get("/api/v1/evidence/fabric/health", async (req, res) => {
 });
 
 app.post("/api/v1/evidence/commit-bundle", async (req, res) => {
-  const { bundle_id: bundleId, raw_bundle_ndjson: rawBundleNdjson, ocsf_bundle_ndjson: ocsfBundleNdjson, bundle_manifest: bundleManifest } = req.body || {};
-
-  if (typeof bundleId !== "string" || !bundleId.trim()) {
-    return res.status(400).json({ error: "bundle_id must be a non-empty string" });
-  }
-  if (typeof rawBundleNdjson !== "string" || !rawBundleNdjson.trim()) {
-    return res.status(400).json({ error: "raw_bundle_ndjson must be a non-empty string" });
-  }
-  if (typeof ocsfBundleNdjson !== "string" || !ocsfBundleNdjson.trim()) {
-    return res.status(400).json({ error: "ocsf_bundle_ndjson must be a non-empty string" });
-  }
-  if (!bundleManifest || typeof bundleManifest !== "object" || Array.isArray(bundleManifest)) {
-    return res.status(400).json({ error: "bundle_manifest must be an object" });
-  }
-  if (bundleManifest.bundle_id !== bundleId) {
-    return res.status(400).json({ error: "bundle_manifest.bundle_id must match bundle_id" });
-  }
-
-  const bundleDir = path.join(storageRoot, "bundles", bundleId);
-
-  try {
-    await fs.mkdir(bundleDir, { recursive: true });
-    const refs = {
-      raw_ndjson: path.join(bundleDir, "raw.ndjson"),
-      ocsf_ndjson: path.join(bundleDir, "ocsf.ndjson"),
-      manifest_json: path.join(bundleDir, "manifest.json"),
-    };
-
-    await fs.writeFile(refs.raw_ndjson, rawBundleNdjson, "utf8");
-    await fs.writeFile(refs.ocsf_ndjson, ocsfBundleNdjson, "utf8");
-    await fs.writeFile(refs.manifest_json, prettyJson(bundleManifest), "utf8");
-
-    const invokeResult = await runInvokeScript(bundleId, canonicalJson(bundleManifest));
-
-    const stored = {
-      bundle_id: bundleId,
-      manifest: bundleManifest,
-      refs,
-      fabric_tx_id: invokeResult.fabricTxId,
-    };
-    inMemoryIndex.set(bundleId, stored);
-    upsertBundleStmt().run(parseBundleRecord(bundleManifest, refs, invokeResult.fabricTxId));
-
-    return res.json({
-      bundle_id: bundleId,
-      fabric_tx_id: invokeResult.fabricTxId,
-      status: "BUNDLE_NOTARIZED",
-    });
-  } catch (error) {
-    return res.status(500).json({
-      error: "Failed to commit bundle",
-      detail: error.message,
-    });
-  }
+  console.log("[EVIDENCE-API] commit-bundle received");
+  console.log(JSON.stringify(req.body ?? {}, null, 2));
+  return res.status(200).json({ status: "ok" });
 });
 
 app.get("/api/v1/evidence/bundles", (req, res) => {
