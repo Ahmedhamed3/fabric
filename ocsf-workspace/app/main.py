@@ -68,6 +68,7 @@ from app.utils.http_status import tail_ndjson
 from app.utils.evidence_hashing import apply_evidence_hashing
 from app.utils.timeutil import utc_now_iso
 from app.debug.pipeline_routes import router as pipeline_router
+from app.pipeline.viewer_routes import router as pipeline_viewer_router
 
 app = FastAPI(
     title="Log → OCSF Converter (MVP)",
@@ -81,6 +82,7 @@ app.mount(
     name="pipeline-ui-static",
 )
 app.include_router(pipeline_router)
+app.include_router(pipeline_viewer_router)
 
 connector_manager = ConnectorManager()
 

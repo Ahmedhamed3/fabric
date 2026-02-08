@@ -3,23 +3,19 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Pipeline Verification</title>
+    <title>Pipeline Evidence Viewer</title>
     <link rel="stylesheet" href="/static/pipeline-ui/styles.css" />
   </head>
   <body>
     <header class="page-header">
       <div>
-        <h1>Pipeline Verification</h1>
-        <p>Inspect raw payloads, envelopes, OCSF output, and validation reports from the live pipeline.</p>
+        <h1>Pipeline Evidence Viewer</h1>
+        <p>Inspect raw payloads, envelopes, OCSF output, and validation reports for evidence IDs emitted by the pipeline.</p>
       </div>
       <div class="controls">
         <label>
           Event limit
           <input id="limitInput" type="number" min="1" max="200" value="50" />
-        </label>
-        <label class="checkbox">
-          <input id="showOcsfOnly" type="checkbox" />
-          Show only events with OCSF
         </label>
         <button id="loadButton" type="button">Load</button>
       </div>
@@ -37,11 +33,11 @@
         <table>
           <thead>
             <tr>
-              <th>Time</th>
+              <th>Observed UTC</th>
               <th>Source</th>
-              <th>Record ID</th>
+              <th>Evidence ID</th>
+              <th>Host</th>
               <th>Class UID / Type UID</th>
-              <th>Validation status</th>
             </tr>
           </thead>
           <tbody id="eventTableBody"></tbody>
@@ -55,28 +51,28 @@
           <h2>Raw Event</h2>
           <span>Raw payload only</span>
         </header>
-        <pre id="rawEventPanel">Select an event to view payload.</pre>
+        <pre id="rawEventPanel">Select an evidence record to view payload.</pre>
       </article>
       <article class="panel">
         <header>
           <h2>Raw Event Envelope</h2>
           <span>Existing envelope (no recompute)</span>
         </header>
-        <pre id="rawEnvelopePanel">Select an event to view envelope.</pre>
+        <pre id="rawEnvelopePanel">Select an evidence record to view envelope.</pre>
       </article>
       <article class="panel">
         <header>
           <h2>OCSF JSON</h2>
           <span>Normalized output</span>
         </header>
-        <pre id="ocsfPanel">Select an event to view OCSF.</pre>
+        <pre id="ocsfPanel">Select an evidence record to view OCSF.</pre>
       </article>
       <article class="panel">
         <header>
           <h2>Validation Report</h2>
           <span>Schema validation results</span>
         </header>
-        <pre id="validationPanel">Select an event to view validation.</pre>
+        <pre id="validationPanel">Select an evidence record to view validation.</pre>
       </article>
     </section>
 
