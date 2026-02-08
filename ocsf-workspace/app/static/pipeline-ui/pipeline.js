@@ -16,9 +16,9 @@ let selectedIndex = -1;
 let selectedEventKey = null;
 let visibleEvents = [];
 
-function formatValue(value) {
+function formatValue(value, fallback) {
   if (value === null || value === undefined) {
-    return "Not produced (unsupported / skipped)";
+    return fallback;
   }
   if (typeof value === "string") {
     return value;
@@ -75,10 +75,10 @@ function renderTable() {
 }
 
 function updatePanels(event) {
-  rawEventPanel.textContent = formatValue(event.raw);
-  rawEnvelopePanel.textContent = formatValue(event.envelope);
-  ocsfPanel.textContent = formatValue(event.ocsf);
-  validationPanel.textContent = formatValue(event.validation);
+  rawEventPanel.textContent = formatValue(event.raw, "No raw payload available.");
+  rawEnvelopePanel.textContent = formatValue(event.envelope, "Not generated");
+  ocsfPanel.textContent = formatValue(event.ocsf, "Unsupported event");
+  validationPanel.textContent = formatValue(event.validation, "Not validated");
 }
 
 function selectEvent(index) {
