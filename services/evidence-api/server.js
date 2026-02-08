@@ -30,11 +30,22 @@ function normalizeSourceKey(source) {
   return `${sourceType}:${product}`;
 }
 
-function addToBuffer(eventMeta) {
-  eventBuffer.push(eventMeta);
+function addToBuffer(eventEntry) {
+  eventBuffer.push(eventEntry);
   if (eventBuffer.length > EVENT_BUFFER_SIZE) {
     eventBuffer.shift();
   }
+}
+
+function formatMetadataResponse(eventEntry) {
+  return {
+    evidence_id: eventEntry.evidence_id,
+    source: eventEntry.metadata.source,
+    timestamps: eventEntry.metadata.timestamps,
+    ocsf: eventEntry.metadata.ocsf,
+    host: eventEntry.metadata.host,
+    hashes: eventEntry.hashes,
+  };
 }
 
 app.post("/api/v1/evidence/events", async (req, res) => {
@@ -43,48 +54,74 @@ app.post("/api/v1/evidence/events", async (req, res) => {
     return res.status(400).json({ error: "body must be a JSON object" });
   }
 
-  const eventMeta = {
-    evidence_id: payload?.evidence_id || null,
-    source: {
-      type: payload?.source?.type || null,
-      vendor: payload?.source?.vendor || null,
-      product: payload?.source?.product || null,
-      channel: payload?.source?.channel || null,
-    },
-    timestamps: {
-      observed_utc: toUtcIso(payload?.timestamps?.observed_utc),
-    },
-    ocsf: {
-      class_uid: payload?.ocsf?.class_uid || null,
-      type_uid: payload?.ocsf?.type_uid || null,
-    },
-    host: {
-      hostname: payload?.host?.hostname || null,
+  // BACKWARD COMPATIBLE
+  const metadataSource = payload?.metadata && typeof payload.metadata === "object" && !Array.isArray(payload.metadata)
+    ? payload.metadata
+    : payload;
+
+  const eventEntry = {
+    evidence_id: metadataSource?.evidence_id || null,
+    metadata: {
+      source: {
+        type: metadataSource?.source?.type || null,
+        vendor: metadataSource?.source?.vendor || null,
+        product: metadataSource?.source?.product || null,
+        channel: metadataSource?.source?.channel || null,
+      },
+      timestamps: {
+        observed_utc: toUtcIso(metadataSource?.timestamps?.observed_utc),
+      },
+      ocsf: {
+        class_uid: metadataSource?.ocsf?.class_uid || null,
+        type_uid: metadataSource?.ocsf?.type_uid || null,
+      },
+      host: {
+        hostname: metadataSource?.host?.hostname || null,
+      },
     },
     hashes: {
-      raw_envelope_sha256: payload?.hashes?.raw_envelope_sha256 || null,
-      raw_payload_sha256: payload?.hashes?.raw_payload_sha256 || null,
-      ocsf_sha256: payload?.hashes?.ocsf_sha256 || null,
+      raw_envelope_sha256: metadataSource?.hashes?.raw_envelope_sha256 || null,
+      raw_payload_sha256: metadataSource?.hashes?.raw_payload_sha256 || null,
+      ocsf_sha256: metadataSource?.hashes?.ocsf_sha256 || null,
     },
   };
 
-  addToBuffer(eventMeta);
-  stats.totalEvents += 1;
-  const sourceKey = normalizeSourceKey(eventMeta.source);
-  stats.eventsBySource.set(sourceKey, (stats.eventsBySource.get(sourceKey) || 0) + 1);
-  if (eventMeta.timestamps.observed_utc) {
-    stats.lastEventBySource.set(sourceKey, eventMeta.timestamps.observed_utc);
+  // OPTIONAL ARTIFACT SUPPORT
+  if (Object.prototype.hasOwnProperty.call(payload, "artifacts")) {
+    eventEntry.artifacts = payload.artifacts;
   }
 
-  console.log(`[EVIDENCE-API] event received evidence_id=${eventMeta.evidence_id || "unknown"} source=${sourceKey}`);
+  addToBuffer(eventEntry);
+  stats.totalEvents += 1;
+  const sourceKey = normalizeSourceKey(eventEntry.metadata.source);
+  stats.eventsBySource.set(sourceKey, (stats.eventsBySource.get(sourceKey) || 0) + 1);
+  if (eventEntry.metadata.timestamps.observed_utc) {
+    stats.lastEventBySource.set(sourceKey, eventEntry.metadata.timestamps.observed_utc);
+  }
+
+  console.log(`[EVIDENCE-API] event received evidence_id=${eventEntry.evidence_id || "unknown"} source=${sourceKey}`);
   return res.status(200).json({ status: "ok" });
 });
 
 app.get("/api/v1/evidence/events", (req, res) => {
   const limit = Math.max(1, Number(req.query.limit || EVENT_BUFFER_SIZE));
   const startIndex = Math.max(0, eventBuffer.length - Math.min(limit, EVENT_BUFFER_SIZE));
+  const includeArtifacts = String(req.query.include_artifacts || "false").toLowerCase() === "true";
   const items = eventBuffer.slice(startIndex);
-  return res.json({ items, total: eventBuffer.length, limit });
+
+  // BACKWARD COMPATIBLE
+  if (!includeArtifacts) {
+    return res.json({ items: items.map((entry) => formatMetadataResponse(entry)), total: eventBuffer.length, limit });
+  }
+
+  // OPTIONAL ARTIFACT SUPPORT
+  const itemsWithArtifacts = items.map((entry) => {
+    if (Object.prototype.hasOwnProperty.call(entry, "artifacts")) {
+      return entry;
+    }
+    return { ...entry, artifacts: null };
+  });
+  return res.json({ items: itemsWithArtifacts, total: eventBuffer.length, limit });
 });
 
 app.get("/api/v1/evidence/stats", (_req, res) => {
