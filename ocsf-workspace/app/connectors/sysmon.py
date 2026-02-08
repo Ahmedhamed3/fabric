@@ -15,12 +15,21 @@ from typing import Any
 from xml.etree import ElementTree
 
 from app.normalizers.sysmon_to_ocsf.io_ndjson import class_path_for_event
-from app.normalizers.sysmon_to_ocsf.mapper import MappingContext, map_raw_event, mapping_attempted
+from app.normalizers.sysmon_to_ocsf.mapper import (
+    MappingContext,
+    map_raw_event,
+    mapping_attempted,
+    missing_required_fields,
+)
+from app.normalizers.sysmon_to_ocsf.report import build_report
 from app.utils.checkpoint import Checkpoint, load_checkpoint, save_checkpoint
 from app.utils.dedupe_cache import DedupeCache, load_dedupe_cache, save_dedupe_cache
 from app.utils.debug_artifacts import debug_artifacts_enabled, mirror_path
 from app.utils.debug_pipeline import debug_pipeline_enabled, read_ndjson, resolve_debug_input, write_ndjson
-from app.utils.evidence_emission import emit_evidence_metadata_for_event, ensure_evidence_api_url
+from app.utils.evidence_artifacts import persist_evidence_artifacts
+from app.utils.evidence_hashing import apply_evidence_hashing
+from app.utils.evidence_metadata import emit_evidence_metadata
+from app.utils.evidence_emission import ensure_evidence_api_url
 from app.utils.http_status import HttpStatusServer, StatusState, tail_ndjson
 from app.utils.ndjson_writer import append_ndjson
 from app.utils.ocsf_schema_loader import get_ocsf_schema_loader
@@ -324,13 +333,34 @@ class SysmonConnector:
             if ocsf_event is None:
                 return
             class_path = class_path_for_event(ocsf_event)
-            emit_evidence_metadata_for_event(
+            if not class_path:
+                return
+            validation = schema_loader.validate_event(ocsf_event, class_path)
+            attempted = mapping_attempted(raw_event)
+            hash_result = apply_evidence_hashing(
                 raw_event,
                 ocsf_event,
                 ocsf_schema=class_path,
                 ocsf_version=context.ocsf_version,
-                log=log,
             )
+            report = build_report(
+                raw_event=hash_result.raw_envelope,
+                ocsf_event=hash_result.ocsf_event,
+                supported=attempted,
+                validation_errors=validation.errors,
+                mapping_attempted=attempted,
+                missing_fields=missing_required_fields(raw_event),
+            )
+            report["validation_ran"] = True
+            report["evidence_commit"] = hash_result.evidence_commit
+            persist_evidence_artifacts(
+                evidence_id=hash_result.evidence_commit["evidence_id"],
+                raw_event=hash_result.raw_envelope.get("raw"),
+                envelope=hash_result.raw_envelope,
+                ocsf_event=hash_result.ocsf_event,
+                validation_report=report,
+            )
+            emit_evidence_metadata(hash_result.evidence_commit, raw_envelope=hash_result.raw_envelope)
         except Exception as exc:  # noqa: BLE001
             log(f"[EVIDENCE-META] failed to build metadata: {exc}")
 
