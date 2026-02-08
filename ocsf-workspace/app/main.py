@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, UploadFile, File, HTTPException, Form
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.correlation.process_chain import build_process_chains
 from app.conversion import (
@@ -66,6 +67,7 @@ from app.normalizers.windows_security_to_ocsf.mapper import (
 from app.utils.http_status import tail_ndjson
 from app.utils.evidence_hashing import apply_evidence_hashing
 from app.utils.timeutil import utc_now_iso
+from app.debug.pipeline_routes import router as pipeline_router
 
 app = FastAPI(
     title="Log → OCSF Converter (MVP)",
@@ -73,6 +75,12 @@ app = FastAPI(
     redoc_url=None,
     openapi_url=None,
 )
+app.mount(
+    "/static/pipeline-ui",
+    StaticFiles(directory=Path("app/static/pipeline-ui")),
+    name="pipeline-ui-static",
+)
+app.include_router(pipeline_router)
 
 connector_manager = ConnectorManager()
 
@@ -687,57 +695,6 @@ SYS_MON_OCSF_TEMPLATE = Template(
       refreshButton.addEventListener("click", () => loadEvents());
       loadEvents();
     </script>
-  </body>
-</html>
-"""
-)
-
-PIPELINE_UI_TEMPLATE = Template(
-    """<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Pipeline Viewer</title>
-    <style>
-      body {
-        font-family: Arial, sans-serif;
-        margin: 24px;
-        color: #1f2933;
-        background: #f8f9fb;
-      }
-      .card {
-        background: #fff;
-        border: 1px solid #e4e7eb;
-        border-radius: 8px;
-        padding: 16px;
-        max-width: 720px;
-      }
-      h1 {
-        margin-top: 0;
-      }
-      p {
-        color: #52606d;
-        line-height: 1.5;
-      }
-      code {
-        background: #f1f5f9;
-        padding: 2px 4px;
-        border-radius: 4px;
-      }
-    </style>
-  </head>
-  <body>
-    <div class="card">
-      <h1>Pipeline Viewer</h1>
-      <p>
-        Pipeline event inspection is disabled in evidence-only mode. Evidence metadata is emitted
-        automatically after hashing on Windows collectors.
-      </p>
-      <p>
-        Use <code>/api/v1/evidence/events</code> on the Evidence API to review emitted metadata.
-      </p>
-    </div>
   </body>
 </html>
 """
@@ -1475,12 +1432,6 @@ async def convert_sysmon_preview(file: UploadFile = File(...)):
 async def sysmon_ocsf_ui(limit: int = 20):
     safe_limit = max(1, min(limit, 200))
     return HTMLResponse(SYS_MON_OCSF_TEMPLATE.substitute(limit=safe_limit))
-
-
-@app.get("/ui/pipeline")
-async def pipeline_ui(limit: int = 20):
-    safe_limit = max(1, min(limit, 200))
-    return HTMLResponse(PIPELINE_UI_TEMPLATE.safe_substitute(limit=safe_limit))
 
 
 @app.get("/api/ocsf/sysmon/events")
