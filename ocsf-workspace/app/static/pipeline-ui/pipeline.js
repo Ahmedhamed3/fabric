@@ -1,6 +1,5 @@
 const limitInput = document.getElementById("limitInput");
 const loadButton = document.getElementById("loadButton");
-const showOcsfOnly = document.getElementById("showOcsfOnly");
 const prevButton = document.getElementById("prevButton");
 const nextButton = document.getElementById("nextButton");
 const statusLabel = document.getElementById("statusLabel");
@@ -11,10 +10,9 @@ const rawEnvelopePanel = document.getElementById("rawEnvelopePanel");
 const ocsfPanel = document.getElementById("ocsfPanel");
 const validationPanel = document.getElementById("validationPanel");
 
-let events = [];
+let evidenceEvents = [];
 let selectedIndex = -1;
-let selectedEventKey = null;
-let visibleEvents = [];
+let selectedEvidenceId = null;
 
 function formatValue(value, fallback) {
   if (value === null || value === undefined) {
@@ -26,9 +24,49 @@ function formatValue(value, fallback) {
   return JSON.stringify(value, null, 2);
 }
 
+function formatSource(event) {
+  const source = event.source || {};
+  const parts = [];
+  if (source.type) {
+    parts.push(source.type);
+  }
+  if (source.product) {
+    parts.push(source.product);
+  }
+  if (source.vendor) {
+    parts.push(source.vendor);
+  }
+  return parts.length ? parts.join(" · ") : "—";
+}
+
+function formatObserved(event) {
+  return (event.timestamps || {}).observed_utc || event.observed_utc || "—";
+}
+
+function formatHost(event) {
+  return (event.host || {}).hostname || "—";
+}
+
+function formatClassType(event) {
+  const ocsf = event.ocsf || {};
+  const classUid = ocsf.class_uid ?? "—";
+  const typeUid = ocsf.type_uid ?? "—";
+  return `${classUid} / ${typeUid}`;
+}
+
 function renderTable() {
   eventTableBody.innerHTML = "";
-  visibleEvents.forEach((event, index) => {
+  if (!evidenceEvents.length) {
+    const row = document.createElement("tr");
+    const cell = document.createElement("td");
+    cell.colSpan = 5;
+    cell.textContent = "No evidence metadata loaded.";
+    row.appendChild(cell);
+    eventTableBody.appendChild(row);
+    return;
+  }
+
+  evidenceEvents.forEach((event, index) => {
     const row = document.createElement("tr");
     row.dataset.index = String(index);
     if (index === selectedIndex) {
@@ -36,123 +74,106 @@ function renderTable() {
     }
 
     const timeCell = document.createElement("td");
-    timeCell.textContent = event.time || "—";
+    timeCell.textContent = formatObserved(event);
 
     const sourceCell = document.createElement("td");
-    sourceCell.textContent = event.source || "—";
+    sourceCell.textContent = formatSource(event);
 
-    const recordCell = document.createElement("td");
-    recordCell.textContent = event.record_id ?? "—";
+    const evidenceCell = document.createElement("td");
+    evidenceCell.textContent = event.evidence_id || "—";
+
+    const hostCell = document.createElement("td");
+    hostCell.textContent = formatHost(event);
 
     const classCell = document.createElement("td");
-    const classUid = event.class_uid ?? "—";
-    const typeUid = event.type_uid ?? "—";
-    classCell.textContent = `${classUid} / ${typeUid}`;
-
-    const statusCell = document.createElement("td");
-    const status = event.validation_status || "—";
-    const pill = document.createElement("span");
-    pill.classList.add("status-pill");
-    if (status === "valid") {
-      pill.classList.add("status-valid");
-    } else if (status === "invalid") {
-      pill.classList.add("status-invalid");
-    } else if (status === "unmapped" || status === "unsupported") {
-      pill.classList.add("status-unmapped");
-    }
-    pill.textContent = status;
-    statusCell.appendChild(pill);
+    classCell.textContent = formatClassType(event);
 
     row.appendChild(timeCell);
     row.appendChild(sourceCell);
-    row.appendChild(recordCell);
+    row.appendChild(evidenceCell);
+    row.appendChild(hostCell);
     row.appendChild(classCell);
-    row.appendChild(statusCell);
 
     row.addEventListener("click", () => selectEvent(index));
     eventTableBody.appendChild(row);
   });
 }
 
-function updatePanels(event) {
-  rawEventPanel.textContent = formatValue(event.raw, "No raw payload available.");
-  rawEnvelopePanel.textContent = formatValue(event.envelope, "Not generated");
-  ocsfPanel.textContent = formatValue(event.ocsf, "Unsupported event");
-  validationPanel.textContent = formatValue(event.validation, "Not validated");
+function updatePanels(payload) {
+  rawEventPanel.textContent = formatValue(payload.raw, "No raw payload found.");
+  rawEnvelopePanel.textContent = formatValue(payload.envelope, "No envelope found.");
+  ocsfPanel.textContent = formatValue(payload.ocsf, "No OCSF output found.");
+  validationPanel.textContent = formatValue(payload.validation, "No validation report found.");
 }
 
-function selectEvent(index) {
-  if (index < 0 || index >= visibleEvents.length) {
+function setEmptyPanels(message) {
+  rawEventPanel.textContent = message;
+  rawEnvelopePanel.textContent = message;
+  ocsfPanel.textContent = message;
+  validationPanel.textContent = message;
+}
+
+async function selectEvent(index) {
+  if (index < 0 || index >= evidenceEvents.length) {
     return;
   }
   selectedIndex = index;
-  selectedEventKey = visibleEvents[index].event_key;
+  selectedEvidenceId = evidenceEvents[index].evidence_id || null;
   renderTable();
-  updatePanels(visibleEvents[index]);
   updateNavButtons();
+  if (!selectedEvidenceId) {
+    setEmptyPanels("No evidence_id available for this record.");
+    return;
+  }
+  setEmptyPanels("Loading artifacts…");
+  await loadLookup(selectedEvidenceId);
 }
 
 function updateNavButtons() {
   prevButton.disabled = selectedIndex <= 0;
-  nextButton.disabled = selectedIndex === -1 || selectedIndex >= visibleEvents.length - 1;
+  nextButton.disabled = selectedIndex === -1 || selectedIndex >= evidenceEvents.length - 1;
 }
 
-function updateVisibleEvents() {
-  visibleEvents = showOcsfOnly.checked
-    ? events.filter((event) => event.ocsf)
-    : events;
-  if (selectedEventKey) {
-    const nextIndex = visibleEvents.findIndex(
-      (event) => event.event_key === selectedEventKey
+async function loadLookup(evidenceId) {
+  try {
+    const response = await fetch(
+      `/api/pipeline/viewer/lookup?evidence_id=${encodeURIComponent(evidenceId)}`
     );
-    selectedIndex = nextIndex;
-  }
-  if (selectedIndex < 0 && visibleEvents.length) {
-    selectedIndex = 0;
-    selectedEventKey = visibleEvents[0].event_key;
-  }
-  if (!visibleEvents.length) {
-    selectedIndex = -1;
-    selectedEventKey = null;
+    const data = await response.json();
+    updatePanels(data || {});
+  } catch (error) {
+    setEmptyPanels("Unable to load pipeline artifacts.");
   }
 }
 
-async function loadEvents() {
-  statusLabel.textContent = "Loading pipeline events…";
+async function loadEvidenceEvents() {
+  statusLabel.textContent = "Loading evidence metadata…";
   const limit = Math.min(Math.max(Number(limitInput.value) || 50, 1), 200);
-  const response = await fetch(`/api/debug/pipeline/events?limit=${limit}`);
-  const data = await response.json();
-  events = data.events || [];
-  statusLabel.textContent = data.message || `${events.length} events loaded.`;
-  selectedEventKey = events.length ? events[0].event_key : null;
-  updateVisibleEvents();
-  renderTable();
-  if (selectedIndex >= 0) {
-    updatePanels(visibleEvents[selectedIndex]);
-  } else {
-    rawEventPanel.textContent = "No events available.";
-    rawEnvelopePanel.textContent = "No events available.";
-    ocsfPanel.textContent = "No events available.";
-    validationPanel.textContent = "No events available.";
+  try {
+    const response = await fetch(`/api/pipeline/viewer/metadata?limit=${limit}`);
+    const data = await response.json();
+    evidenceEvents = data.events || [];
+    statusLabel.textContent = data.message || `${evidenceEvents.length} evidence records loaded.`;
+    selectedIndex = evidenceEvents.length ? 0 : -1;
+    selectedEvidenceId = evidenceEvents.length ? evidenceEvents[0].evidence_id : null;
+    renderTable();
+    if (selectedEvidenceId) {
+      await loadLookup(selectedEvidenceId);
+    } else {
+      setEmptyPanels("No evidence metadata available.");
+    }
+    updateNavButtons();
+  } catch (error) {
+    evidenceEvents = [];
+    statusLabel.textContent = "Unable to load evidence metadata.";
+    renderTable();
+    setEmptyPanels("Unable to load evidence metadata.");
+    updateNavButtons();
   }
-  updateNavButtons();
 }
 
 prevButton.addEventListener("click", () => selectEvent(selectedIndex - 1));
 nextButton.addEventListener("click", () => selectEvent(selectedIndex + 1));
-loadButton.addEventListener("click", loadEvents);
-showOcsfOnly.addEventListener("change", () => {
-  updateVisibleEvents();
-  renderTable();
-  if (selectedIndex >= 0) {
-    updatePanels(visibleEvents[selectedIndex]);
-  } else {
-    rawEventPanel.textContent = "No events available.";
-    rawEnvelopePanel.textContent = "No events available.";
-    ocsfPanel.textContent = "No events available.";
-    validationPanel.textContent = "No events available.";
-  }
-  updateNavButtons();
-});
+loadButton.addEventListener("click", loadEvidenceEvents);
 
-loadEvents();
+loadEvidenceEvents();
