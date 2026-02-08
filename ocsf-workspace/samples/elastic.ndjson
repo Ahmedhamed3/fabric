@@ -1,0 +1,2 @@
+{"_index":"logs-test-default","_id":"abc123","_source":{"@timestamp":"2024-04-01T12:34:56.789Z","message":"Hello elastic","event":{"id":"evt-1","code":"A1","severity":7},"log":{"level":"error"},"host":{"name":"host-a","os":{"name":"Linux"}}},"fields":{"@timestamp":["2024-04-01T12:34:56.789Z"]},"sort":[1711974896]}
+{"_index":"logs-test-default","_id":"def456","_source":{"message":"No timestamp","event":{"severity":2}},"fields":{},"sort":[1711975000]}

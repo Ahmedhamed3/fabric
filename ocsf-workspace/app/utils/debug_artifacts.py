@@ -5,11 +5,15 @@ from pathlib import Path
 
 
 DEBUG_ARTIFACT_ENV = "FABRIC_DEBUG_PIPELINE"
+DEBUG_PIPELINE_ENV = "OCSF_DEBUG_PIPELINE"
 
 
 def debug_artifacts_enabled() -> bool:
-    value = os.getenv(DEBUG_ARTIFACT_ENV, "").strip().lower()
-    return value in {"1", "true", "yes", "on"}
+    for env_name in (DEBUG_ARTIFACT_ENV, DEBUG_PIPELINE_ENV):
+        value = os.getenv(env_name, "").strip().lower()
+        if value in {"1", "true", "yes", "on"}:
+            return True
+    return False
 
 
 def mirror_path(path: Path, source_root: str | Path, target_root: str | Path) -> Path:
