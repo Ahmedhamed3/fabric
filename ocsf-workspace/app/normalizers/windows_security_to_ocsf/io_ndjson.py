@@ -55,7 +55,7 @@ def convert_events(
                     )
                     ocsf_event = hash_result.ocsf_event
                     evidence_commit = hash_result.evidence_commit
-                    emit_evidence_metadata(evidence_commit)
+                    emit_evidence_metadata(evidence_commit, raw_envelope=raw_event)
             else:
                 supported = False
                 ocsf_event = None

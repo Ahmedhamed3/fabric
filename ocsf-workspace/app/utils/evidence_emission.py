@@ -33,7 +33,7 @@ def emit_evidence_metadata_for_event(
             ocsf_schema=ocsf_schema,
             ocsf_version=ocsf_version,
         )
-        emit_evidence_metadata(hash_result.evidence_commit)
+        emit_evidence_metadata(hash_result.evidence_commit, raw_envelope=raw_event)
     except Exception as exc:  # noqa: BLE001
         message = f"[EVIDENCE-META] failed to emit metadata: {exc}"
         if log is not None:

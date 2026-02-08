@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import os
 import socket
 import subprocess
 import sys
@@ -339,6 +340,9 @@ def parse_args(argv: list[str]) -> ConnectorConfig:
 
 
 def main(argv: list[str] | None = None) -> None:
+    if os.name != "nt":
+        log("[CONNECTOR] Windows-only connector skipped (non-Windows OS)")
+        return
     config = parse_args(argv or sys.argv[1:])
     connector = SysmonConnector()
     connector.run_forever(

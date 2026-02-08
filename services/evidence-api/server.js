@@ -1,7 +1,5 @@
 const express = require("express");
 const cors = require("cors");
-const crypto = require("crypto");
-
 const app = express();
 app.use(express.json({ limit: "25mb" }));
 app.use(cors({ origin: [/^http:\/\/127\.0\.0\.1:\d+$/, /^http:\/\/localhost:\d+$/] }));
@@ -15,10 +13,6 @@ const stats = {
   lastEventBySource: new Map(),
 };
 
-function sha256Hex(value) {
-  return crypto.createHash("sha256").update(value).digest("hex");
-}
-
 function toUtcIso(value) {
   if (!value) {
     return null;
@@ -28,25 +22,6 @@ function toUtcIso(value) {
     return null;
   }
   return parsed.toISOString();
-}
-
-function firstNdjsonRecord(ndjson) {
-  if (typeof ndjson !== "string") {
-    return null;
-  }
-  const lines = ndjson.split("\n");
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (!trimmed) {
-      continue;
-    }
-    try {
-      return JSON.parse(trimmed);
-    } catch (error) {
-      return null;
-    }
-  }
-  return null;
 }
 
 function normalizeSourceKey(source) {
@@ -61,70 +36,6 @@ function addToBuffer(eventMeta) {
     eventBuffer.shift();
   }
 }
-
-app.post("/api/v1/evidence/commit-bundle", async (req, res) => {
-  const payload = req.body;
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
-    return res.status(400).json({ error: "body must be a JSON object" });
-  }
-
-  const manifest = payload?.bundle_manifest || {};
-  const source = manifest?.source || {};
-  const evidenceId = manifest?.bundle_id || payload?.bundle_id || null;
-  const observedUtc = toUtcIso(manifest?.time_window?.end_utc) || toUtcIso(manifest?.time_window?.start_utc);
-  const firstOcsfEvent = firstNdjsonRecord(payload?.ocsf_bundle_ndjson);
-  const classUid = firstOcsfEvent?.class_uid || null;
-  const typeUid = firstOcsfEvent?.type_uid || null;
-  const rawEnvelopeHash = manifest?.hashes?.raw_bundle?.sha256
-    || (typeof payload?.raw_bundle_ndjson === "string" ? sha256Hex(payload.raw_bundle_ndjson) : null);
-  const ocsfHash = manifest?.hashes?.ocsf_bundle?.sha256
-    || (typeof payload?.ocsf_bundle_ndjson === "string" ? sha256Hex(payload.ocsf_bundle_ndjson) : null);
-
-  const isValid = Boolean(
-    evidenceId
-    && source?.type
-    && source?.product
-    && observedUtc
-    && classUid
-    && typeUid
-    && rawEnvelopeHash
-    && ocsfHash
-  );
-
-  const eventMeta = {
-    evidence_id: evidenceId,
-    source: {
-      type: source?.type || null,
-      product: source?.product || null,
-    },
-    timestamps: {
-      observed_utc: observedUtc,
-    },
-    ocsf: {
-      class_uid: classUid,
-      type_uid: typeUid,
-    },
-    hashes: {
-      raw_envelope_hash: rawEnvelopeHash,
-      ocsf_hash: ocsfHash,
-    },
-    validation: {
-      status: isValid ? "valid" : "invalid",
-    },
-  };
-
-  addToBuffer(eventMeta);
-  stats.totalEvents += 1;
-  const sourceKey = normalizeSourceKey(eventMeta.source);
-  stats.eventsBySource.set(sourceKey, (stats.eventsBySource.get(sourceKey) || 0) + 1);
-  if (eventMeta.timestamps.observed_utc) {
-    stats.lastEventBySource.set(sourceKey, eventMeta.timestamps.observed_utc);
-  }
-
-  console.log(`[EVIDENCE-API] commit-bundle received evidence_id=${evidenceId || "unknown"} source=${sourceKey}`);
-
-  return res.status(200).json({ status: "ok" });
-});
 
 app.post("/api/v1/evidence/events", async (req, res) => {
   const payload = req.body;
@@ -147,14 +58,13 @@ app.post("/api/v1/evidence/events", async (req, res) => {
       class_uid: payload?.ocsf?.class_uid || null,
       type_uid: payload?.ocsf?.type_uid || null,
     },
-    hashes: {
-      raw_envelope_hash: payload?.hashes?.raw_envelope_hash || null,
-      raw_payload_hash: payload?.hashes?.raw_payload_hash || null,
-      ocsf_hash: payload?.hashes?.ocsf_hash || null,
+    host: {
+      hostname: payload?.host?.hostname || null,
     },
-    linkage: {
-      record_id: payload?.linkage?.record_id || null,
-      dedupe_hash: payload?.linkage?.dedupe_hash || null,
+    hashes: {
+      raw_envelope_sha256: payload?.hashes?.raw_envelope_sha256 || null,
+      raw_payload_sha256: payload?.hashes?.raw_payload_sha256 || null,
+      ocsf_sha256: payload?.hashes?.ocsf_sha256 || null,
     },
   };
 
