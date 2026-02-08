@@ -18,7 +18,8 @@ from typing import Any, Iterable
 from app.normalizers.elastic_to_ocsf.io_ndjson import class_path_for_event
 from app.normalizers.elastic_to_ocsf.mapper import MappingContext, map_raw_event
 from app.utils.checkpoint import ElasticCheckpoint, load_elastic_checkpoint, save_elastic_checkpoint
-from app.utils.debug_artifacts import debug_artifacts_enabled
+from app.utils.debug_artifacts import debug_artifacts_enabled, mirror_path
+from app.utils.debug_pipeline import debug_pipeline_enabled, read_ndjson, resolve_debug_input, write_ndjson
 from app.utils.evidence_emission import emit_evidence_metadata_for_event, ensure_evidence_api_url
 from app.utils.http_status import HttpStatusServer, tail_ndjson
 from app.utils.ndjson_writer import append_ndjson
@@ -37,6 +38,8 @@ DEFAULT_USERNAME = "elastic"
 CHECKPOINT_PATH = "state/elastic_checkpoint.json"
 BASE_OUTPUT_DIR = "out/raw/siem/elastic"
 MAX_LAST_IDS_AT_TS = 1000
+DEBUG_INPUT_ENV = "OCSF_DEBUG_ELASTIC_INPUT"
+DEBUG_INPUT_DEFAULT = "samples/elastic.ndjson"
 
 
 class TransientElasticsearchError(RuntimeError):
@@ -102,10 +105,14 @@ class ElasticConnector:
         self.hostname = socket.gethostname()
         self.timezone_name = local_timezone_name()
         self.tail_buffer: deque[dict] = deque(maxlen=tail_size)
-        self._debug_envelope_enabled = debug_artifacts_enabled()
+        self._debug_mode = debug_pipeline_enabled()
+        self._debug_envelope_enabled = debug_artifacts_enabled() if not self._debug_mode else False
 
     def run_forever(self, poll_seconds: int, max_events: int, http_port: int | None) -> None:
         ensure_evidence_api_url()
+        if self._debug_mode:
+            self._run_debug_pipeline(poll_seconds, http_port)
+            return
         checkpoint = load_elastic_checkpoint(CHECKPOINT_PATH)
         if not checkpoint.indices:
             checkpoint.indices = self.indices
@@ -364,6 +371,100 @@ class ElasticConnector:
         except Exception as exc:  # noqa: BLE001
             log(f"[EVIDENCE-META] failed to build metadata: {exc}")
 
+    def _run_debug_pipeline(self, poll_seconds: int, http_port: int | None) -> None:
+        status_state = ElasticStatusState()
+        http_server = None
+        if http_port is not None:
+            http_server = HttpStatusServer(
+                host="127.0.0.1",
+                port=http_port,
+                status_state=status_state,
+                tail_buffer=self.tail_buffer,
+                tail_reader=lambda limit: tail_elastic_ndjson(BASE_OUTPUT_DIR, limit),
+            )
+            http_server.start()
+            log(f"HTTP status server listening on 127.0.0.1:{http_port}")
+        try:
+            hits = self._load_debug_hits()
+            if hits:
+                written = self._write_debug_outputs(hits)
+                status_state.update(
+                    events_written_total=written,
+                    last_batch_count=written,
+                    last_error=None,
+                )
+            else:
+                status_state.update(last_batch_count=0, last_error="No debug input events.")
+                log("No debug input events found.")
+            while True:
+                time.sleep(poll_seconds)
+        finally:
+            if http_server:
+                http_server.stop()
+
+    def _load_debug_hits(self) -> list[dict]:
+        input_path = resolve_debug_input(DEBUG_INPUT_ENV, DEBUG_INPUT_DEFAULT)
+        return read_ndjson(input_path)
+
+    def _write_debug_outputs(self, hits: list[dict]) -> int:
+        grouped: dict[Path, list[dict]] = defaultdict(list)
+        for hit in hits:
+            index = hit.get("_index") or "unknown"
+            when = _parse_timestamp(_debug_hit_timestamp(hit))
+            output_path = build_elastic_output_path(
+                BASE_OUTPUT_DIR, str(index), when
+            )
+            grouped[output_path].append(hit)
+        written = 0
+        for raw_path, batch in grouped.items():
+            write_ndjson(raw_path, batch)
+            written += len(batch)
+            envelope_events = [
+                build_elastic_raw_event(
+                    hit,
+                    now_utc=utc_now_iso(),
+                    hostname=self.hostname,
+                    timezone_name=self.timezone_name,
+                )
+                for hit in batch
+            ]
+            if envelope_events:
+                envelope_path = mirror_path(
+                    raw_path, BASE_OUTPUT_DIR, "out/envelope/siem/elastic"
+                )
+                write_ndjson(envelope_path, envelope_events)
+                self._write_debug_ocsf_outputs(envelope_events, raw_path)
+                for event in envelope_events[-DEFAULT_TAIL_SIZE:]:
+                    self.tail_buffer.append(event)
+        return written
+
+    def _write_debug_ocsf_outputs(self, envelope_events: list[dict], raw_path: Path) -> None:
+        from app.normalizers.elastic_to_ocsf.io_ndjson import convert_events, write_ndjson as write_ocsf
+        from app.normalizers.elastic_to_ocsf.validator import OcsfSchemaLoader
+
+        schema_loader = OcsfSchemaLoader(Path("app/ocsf_schema"))
+        outputs = []
+        reports = []
+        for ocsf_event, report in convert_events(
+            envelope_events, schema_loader=schema_loader, strict=False
+        ):
+            if ocsf_event is not None:
+                outputs.append(ocsf_event)
+            if report.get("supported"):
+                reports.append(report)
+        ocsf_path = mirror_path(
+            raw_path, BASE_OUTPUT_DIR, "out/ocsf/siem/elastic"
+        )
+        report_path = ocsf_path.with_suffix(".report.ndjson")
+        write_ocsf(ocsf_path, outputs)
+        write_ocsf(report_path, reports)
+        validation_reports = [report for report in reports if report.get("validation_ran")]
+        if validation_reports:
+            validation_path = mirror_path(
+                report_path, "out/ocsf", "out/validation"
+            )
+            write_ocsf(validation_path, validation_reports)
+
 
 def build_elastic_query(
     last_ts: str | None,
@@ -433,6 +534,22 @@ def _parse_timestamp(timestamp: str | None) -> datetime:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone(timezone.utc)
+
+
+def _debug_hit_timestamp(hit: dict[str, Any]) -> str | None:
+    source = hit.get("_source") or {}
+    if isinstance(source, dict):
+        timestamp = source.get("@timestamp")
+        if timestamp:
+            return timestamp
+    fields = hit.get("fields") or {}
+    if isinstance(fields, dict):
+        values = fields.get("@timestamp")
+        if isinstance(values, list) and values:
+            return values[0]
+        if isinstance(values, str):
+            return values
+    return None
 
 
 def _build_basic_auth(username: str, password: str) -> str:

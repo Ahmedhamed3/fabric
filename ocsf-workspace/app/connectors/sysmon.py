@@ -15,10 +15,11 @@ from typing import Any
 from xml.etree import ElementTree
 
 from app.normalizers.sysmon_to_ocsf.io_ndjson import class_path_for_event
-from app.normalizers.sysmon_to_ocsf.mapper import MappingContext, map_raw_event
+from app.normalizers.sysmon_to_ocsf.mapper import MappingContext, map_raw_event, mapping_attempted
 from app.utils.checkpoint import Checkpoint, load_checkpoint, save_checkpoint
 from app.utils.dedupe_cache import DedupeCache, load_dedupe_cache, save_dedupe_cache
-from app.utils.debug_artifacts import debug_artifacts_enabled
+from app.utils.debug_artifacts import debug_artifacts_enabled, mirror_path
+from app.utils.debug_pipeline import debug_pipeline_enabled, read_ndjson, resolve_debug_input, write_ndjson
 from app.utils.evidence_emission import emit_evidence_metadata_for_event, ensure_evidence_api_url
 from app.utils.http_status import HttpStatusServer, StatusState, tail_ndjson
 from app.utils.ndjson_writer import append_ndjson
@@ -32,6 +33,8 @@ DEFAULT_MAX_EVENTS = 500
 DEFAULT_TAIL_SIZE = 200
 CHECKPOINT_PATH = "state/sysmon_checkpoint.json"
 BASE_OUTPUT_DIR = "out/raw/endpoint/windows_sysmon"
+DEBUG_INPUT_ENV = "OCSF_DEBUG_SYSMON_INPUT"
+DEBUG_INPUT_DEFAULT = "samples/sysmon.ndjson"
 
 
 try:
@@ -55,17 +58,20 @@ class SysmonConnector:
         self.hostname = socket.gethostname()
         self.channel = CHANNEL
         self.tail_buffer: deque[dict] = deque(maxlen=tail_size)
-        self.mode = "pywin32" if HAS_PYWIN32 else "powershell"
+        self._debug_mode = debug_pipeline_enabled()
+        self.mode = "debug-file" if self._debug_mode else ("pywin32" if HAS_PYWIN32 else "powershell")
         self._output_paths = build_output_paths(BASE_OUTPUT_DIR, self.hostname)
-        self._debug_envelope_paths = (
-            build_output_paths("out/envelope/endpoint/windows_sysmon", self.hostname)
-            if debug_artifacts_enabled()
-            else None
-        )
+        self._debug_envelope_paths = None
+        if not self._debug_mode and debug_artifacts_enabled():
+            self._debug_envelope_paths = build_output_paths(
+                "out/envelope/endpoint/windows_sysmon", self.hostname
+            )
         self._dedupe_cache_path: Path | None = None
         self._dedupe_cache: DedupeCache | None = None
 
     def read_new_events(self, last_record_id: int, max_events: int) -> list[dict]:
+        if self._debug_mode:
+            return self._read_debug_events(max_events)
         if HAS_PYWIN32:
             return self._read_new_events_pywin32(last_record_id, max_events)
         return self._read_new_events_powershell(last_record_id, max_events)
@@ -113,6 +119,9 @@ class SysmonConnector:
 
     def run_forever(self, poll_seconds: int, max_events: int, http_port: int | None) -> None:
         ensure_evidence_api_url()
+        if self._debug_mode:
+            self._run_debug_pipeline(poll_seconds, http_port)
+            return
         checkpoint = load_checkpoint(CHECKPOINT_PATH)
         status_state = StatusState(
             hostname=self.hostname,
@@ -181,6 +190,101 @@ class SysmonConnector:
         checkpoint.last_record_id = max(event["ids"]["record_id"] for event in events)
         save_checkpoint(CHECKPOINT_PATH, checkpoint)
         return written, events[-1]["event"]["time"]["created_utc"]
+
+    def _run_debug_pipeline(self, poll_seconds: int, http_port: int | None) -> None:
+        status_state = StatusState(
+            hostname=self.hostname,
+            channel=self.channel,
+            mode=self.mode,
+            last_record_id=0,
+        )
+        http_server = None
+        if http_port is not None:
+            http_server = HttpStatusServer(
+                host="127.0.0.1",
+                port=http_port,
+                status_state=status_state,
+                tail_buffer=self.tail_buffer,
+                tail_reader=lambda limit: tail_ndjson(
+                    self._output_paths.daily_events_path(), limit
+                ),
+            )
+            http_server.start()
+            log(f"HTTP status server listening on 127.0.0.1:{http_port}")
+        try:
+            raw_events = self._load_debug_raw_events()
+            if raw_events:
+                raw_path = self._output_paths.daily_events_path()
+                write_ndjson(raw_path, raw_events)
+                envelope_events = self._build_debug_envelopes(raw_events)
+                if envelope_events:
+                    envelope_path = mirror_path(
+                        raw_path, BASE_OUTPUT_DIR, "out/envelope/endpoint/windows_sysmon"
+                    )
+                    write_ndjson(envelope_path, envelope_events)
+                    self._write_debug_ocsf_outputs(envelope_events, raw_path)
+                status_state.update(
+                    last_record_id=len(raw_events),
+                    events_written_total=len(raw_events),
+                    last_batch_count=len(raw_events),
+                    last_event_time_utc=_debug_event_time(raw_events),
+                    last_error=None,
+                )
+                for event in envelope_events[-DEFAULT_TAIL_SIZE:]:
+                    self.tail_buffer.append(event)
+            else:
+                status_state.update(last_batch_count=0, last_error="No debug input events.")
+                log("No debug input events found.")
+            while True:
+                time.sleep(poll_seconds)
+        finally:
+            if http_server:
+                http_server.stop()
+
+    def _read_debug_events(self, max_events: int) -> list[dict]:
+        events = self._load_debug_raw_events()
+        if max_events <= 0:
+            return events
+        return events[:max_events]
+
+    def _load_debug_raw_events(self) -> list[dict]:
+        input_path = resolve_debug_input(DEBUG_INPUT_ENV, DEBUG_INPUT_DEFAULT)
+        return read_ndjson(input_path)
+
+    def _build_debug_envelopes(self, raw_events: list[dict]) -> list[dict]:
+        envelopes: list[dict] = []
+        for index, raw_event in enumerate(raw_events, start=1):
+            envelope = build_debug_sysmon_envelope(raw_event, self.hostname, index)
+            if mapping_attempted(envelope):
+                envelopes.append(envelope)
+        return envelopes
+
+    def _write_debug_ocsf_outputs(self, envelope_events: list[dict], raw_path: Path) -> None:
+        from app.normalizers.sysmon_to_ocsf.io_ndjson import convert_events, write_ndjson as write_ocsf
+        from app.normalizers.sysmon_to_ocsf.validator import OcsfSchemaLoader
+
+        schema_loader = OcsfSchemaLoader(Path("app/ocsf_schema"))
+        outputs = []
+        reports = []
+        for ocsf_event, report in convert_events(
+            envelope_events, schema_loader=schema_loader, strict=False
+        ):
+            if ocsf_event is not None:
+                outputs.append(ocsf_event)
+            if report.get("supported"):
+                reports.append(report)
+        ocsf_path = mirror_path(
+            raw_path, BASE_OUTPUT_DIR, "out/ocsf/endpoint/windows_sysmon"
+        )
+        report_path = ocsf_path.with_suffix(".report.ndjson")
+        write_ocsf(ocsf_path, outputs)
+        write_ocsf(report_path, reports)
+        validation_reports = [report for report in reports if report.get("validation_ran")]
+        if validation_reports:
+            validation_path = mirror_path(
+                report_path, "out/ocsf", "out/validation"
+            )
+            write_ocsf(validation_path, validation_reports)
 
     def _ensure_dedupe_cache(self, output_path: Path) -> DedupeCache:
         dedupe_path = output_path.with_suffix(".dedupe.json")
@@ -304,6 +408,72 @@ def parse_event_xml(xml: str, hostname: str) -> dict[str, Any] | None:
     }
 
 
+def build_debug_sysmon_envelope(
+    raw_record: dict[str, Any],
+    hostname: str,
+    record_id: int,
+) -> dict[str, Any]:
+    event_id = raw_record.get("EventID") or raw_record.get("event_id")
+    event_id_value = int(event_id) if isinstance(event_id, (int, str)) and str(event_id).isdigit() else None
+    created_utc = to_utc_iso(raw_record.get("UtcTime") or raw_record.get("time_created_utc")) or utc_now_iso()
+    level = raw_record.get("Level") or raw_record.get("level")
+    severity = map_severity(int(level)) if str(level).isdigit() else "information"
+    timezone_name = local_timezone_name()
+    dedupe_hash = build_dedupe_hash(hostname, record_id, event_id_value or 0, created_utc)
+    raw_event_data = raw_record.get("EventData") or raw_record.get("event_data") or {}
+    computer = raw_record.get("Computer") or raw_record.get("computer") or hostname
+    return {
+        "envelope_version": "1.0",
+        "source": {
+            "type": "sysmon",
+            "vendor": "microsoft",
+            "product": "sysmon",
+            "channel": CHANNEL,
+            "collector": {
+                "name": "sysmon-connector",
+                "instance_id": f"{hostname}:sysmon",
+                "host": hostname,
+            },
+        },
+        "event": {
+            "time": {
+                "observed_utc": utc_now_iso(),
+                "created_utc": created_utc,
+            }
+        },
+        "ids": {
+            "record_id": record_id,
+            "event_id": event_id_value,
+            "activity_id": None,
+            "correlation_id": None,
+            "dedupe_hash": dedupe_hash,
+        },
+        "host": {
+            "hostname": computer,
+            "os": "windows",
+            "timezone": timezone_name,
+        },
+        "severity": severity,
+        "tags": ["debug", "sysmon"],
+        "raw": {
+            "format": "json",
+            "data": raw_record,
+            "rendered_message": raw_record.get("Message"),
+        },
+        "parsed": {
+            "event_data": raw_event_data,
+        },
+    }
+
+
+def _debug_event_time(raw_events: list[dict]) -> str | None:
+    if not raw_events:
+        return None
+    raw_event = raw_events[-1]
+    time_value = raw_event.get("UtcTime")
+    return to_utc_iso(time_value) or utc_now_iso()
+
+
 def map_severity(level: int | None) -> str:
     if level == 4:
         return "information"
@@ -348,7 +518,7 @@ def parse_args(argv: list[str]) -> ConnectorConfig:
 
 
 def main(argv: list[str] | None = None) -> None:
-    if os.name != "nt":
+    if os.name != "nt" and not debug_pipeline_enabled():
         log("[CONNECTOR] Windows-only connector skipped (non-Windows OS)")
         return
     config = parse_args(argv or sys.argv[1:])
