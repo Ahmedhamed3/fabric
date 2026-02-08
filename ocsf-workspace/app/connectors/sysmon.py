@@ -18,6 +18,7 @@ from app.normalizers.sysmon_to_ocsf.io_ndjson import class_path_for_event
 from app.normalizers.sysmon_to_ocsf.mapper import MappingContext, map_raw_event
 from app.utils.checkpoint import Checkpoint, load_checkpoint, save_checkpoint
 from app.utils.dedupe_cache import DedupeCache, load_dedupe_cache, save_dedupe_cache
+from app.utils.debug_artifacts import debug_artifacts_enabled
 from app.utils.evidence_emission import emit_evidence_metadata_for_event, ensure_evidence_api_url
 from app.utils.http_status import HttpStatusServer, StatusState, tail_ndjson
 from app.utils.ndjson_writer import append_ndjson
@@ -56,6 +57,11 @@ class SysmonConnector:
         self.tail_buffer: deque[dict] = deque(maxlen=tail_size)
         self.mode = "pywin32" if HAS_PYWIN32 else "powershell"
         self._output_paths = build_output_paths(BASE_OUTPUT_DIR, self.hostname)
+        self._debug_envelope_paths = (
+            build_output_paths("out/envelope/endpoint/windows_sysmon", self.hostname)
+            if debug_artifacts_enabled()
+            else None
+        )
         self._dedupe_cache_path: Path | None = None
         self._dedupe_cache: DedupeCache | None = None
 
@@ -167,6 +173,8 @@ class SysmonConnector:
         for event in deduped_events:
             self._emit_evidence_metadata(event)
         written = append_ndjson(output_path, deduped_events)
+        if self._debug_envelope_paths:
+            append_ndjson(self._debug_envelope_paths.daily_events_path(), deduped_events)
         self._persist_dedupe_cache(cache)
         for event in deduped_events:
             self.tail_buffer.append(event)

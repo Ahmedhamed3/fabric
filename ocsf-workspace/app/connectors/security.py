@@ -15,6 +15,7 @@ from xml.etree import ElementTree
 from app.normalizers.windows_security_to_ocsf.io_ndjson import class_path_for_event
 from app.normalizers.windows_security_to_ocsf.mapper import MappingContext, map_raw_event
 from app.utils.checkpoint import Checkpoint, load_checkpoint, save_checkpoint
+from app.utils.debug_artifacts import debug_artifacts_enabled
 from app.utils.evidence_emission import emit_evidence_metadata_for_event, ensure_evidence_api_url
 from app.utils.http_status import HttpStatusServer, StatusState, tail_ndjson
 from app.utils.ndjson_writer import append_ndjson
@@ -54,6 +55,11 @@ class SecurityConnector:
         self.tail_buffer: deque[dict] = deque(maxlen=tail_size)
         self.mode = "pywin32" if HAS_PYWIN32 else "powershell"
         self._output_paths = build_output_paths(BASE_OUTPUT_DIR, self.hostname)
+        self._debug_envelope_paths = (
+            build_output_paths("out/envelope/endpoint/windows_security", self.hostname)
+            if debug_artifacts_enabled()
+            else None
+        )
         self.timezone_name = local_timezone_name()
 
     def read_new_events(self, last_record_id: int, max_events: int) -> list[dict]:
@@ -158,6 +164,10 @@ class SecurityConnector:
                         for event in events:
                             self._emit_evidence_metadata(event)
                         written = append_ndjson(output_path, events)
+                        if self._debug_envelope_paths:
+                            append_ndjson(
+                                self._debug_envelope_paths.daily_events_path(), events
+                            )
                         for event in events:
                             self.tail_buffer.append(event)
                         checkpoint.last_record_id = max(
