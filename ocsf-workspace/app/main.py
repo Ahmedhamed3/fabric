@@ -597,10 +597,6 @@ SYS_MON_OCSF_TEMPLATE = Template(
         font-size: 12px;
         color: #52606d;
       }
-      .commit-button[disabled] {
-        cursor: not-allowed;
-        opacity: 0.6;
-      }
     </style>
   </head>
   <body>
@@ -612,7 +608,6 @@ SYS_MON_OCSF_TEMPLATE = Template(
           <input id="limitInput" type="number" min="1" max="200" value="$limit" />
         </label>
         <button id="refreshButton">Refresh</button>
-        <button id="commitButton" class="commit-button" disabled>Commit to Fabric</button>
         <span class="status" id="statusLabel"></span>
       </div>
     </div>
@@ -639,15 +634,6 @@ SYS_MON_OCSF_TEMPLATE = Template(
       const statusLabel = document.getElementById("statusLabel");
       const limitInput = document.getElementById("limitInput");
       const refreshButton = document.getElementById("refreshButton");
-      const commitButton = document.getElementById("commitButton");
-      const evidenceApiBase = "http://127.0.0.1:4100";
-      const selectedEventState = {
-        source: null,
-        original: null,
-        rawEnvelope: null,
-        ocsf: null,
-        report: null,
-      };
 
       function formatJson(value) {
         if (!value) {
@@ -720,316 +706,38 @@ PIPELINE_UI_TEMPLATE = Template(
         color: #1f2933;
         background: #f8f9fb;
       }
-      .header {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        margin-bottom: 16px;
-        flex-wrap: wrap;
-        gap: 12px;
-      }
-      .controls {
-        display: flex;
-        gap: 12px;
-        align-items: center;
-        flex-wrap: wrap;
-      }
-      select,
-      input[type="number"] {
-        padding: 6px 10px;
-        border-radius: 6px;
-        border: 1px solid #cbd2d9;
-        background: #fff;
-      }
-      button {
-        border: 1px solid #cbd2d9;
-        border-radius: 6px;
-        background: #fff;
-        padding: 6px 10px;
-        cursor: pointer;
-      }
-      .event-list {
-        display: flex;
-        gap: 8px;
-        flex-wrap: wrap;
-        margin-bottom: 16px;
-      }
-      .event-list button.active {
-        background: #2563eb;
-        color: #fff;
-        border-color: #2563eb;
-      }
-      .panel-grid {
-        display: grid;
-        grid-template-columns: repeat(2, minmax(280px, 1fr));
-        gap: 16px;
-      }
-      .panel {
+      .card {
         background: #fff;
         border: 1px solid #e4e7eb;
         border-radius: 8px;
-        padding: 12px;
-        display: flex;
-        flex-direction: column;
-        min-height: 320px;
+        padding: 16px;
+        max-width: 720px;
       }
-      .panel h2 {
-        font-size: 14px;
-        margin: 0 0 8px 0;
+      h1 {
+        margin-top: 0;
+      }
+      p {
         color: #52606d;
-        text-transform: uppercase;
-        letter-spacing: 0.04em;
+        line-height: 1.5;
       }
-      pre {
-        flex: 1;
-        margin: 0;
-        padding: 12px;
-        background: #0f172a;
-        color: #e2e8f0;
-        border-radius: 6px;
-        overflow: auto;
-        font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
-        font-size: 12px;
-        white-space: pre-wrap;
-        word-break: break-word;
-      }
-      .status {
-        font-size: 12px;
-        color: #52606d;
-      }
-      .commit-button[disabled] {
-        cursor: not-allowed;
-        opacity: 0.6;
-      }
-      @media (max-width: 768px) {
-        .panel-grid {
-          grid-template-columns: 1fr;
-        }
+      code {
+        background: #f1f5f9;
+        padding: 2px 4px;
+        border-radius: 4px;
       }
     </style>
   </head>
   <body>
-    <div class="header">
+    <div class="card">
       <h1>Pipeline Viewer</h1>
-      <div class="controls">
-        <label>
-          Source:
-          <select id="sourceSelect">
-            <option value="sysmon" selected>Sysmon</option>
-            <option value="security">Windows Security</option>
-            <option value="elastic">Elastic</option>
-          </select>
-        </label>
-        <label>
-          Latest N:
-          <input id="limitInput" type="number" min="1" max="200" value="$limit" />
-        </label>
-        <button id="refreshButton">Refresh</button>
-        <button id="commitButton" class="commit-button" disabled>Commit to Fabric</button>
-        <span class="status" id="statusLabel"></span>
-      </div>
+      <p>
+        Pipeline event inspection is disabled in evidence-only mode. Evidence metadata is emitted
+        automatically after hashing on Windows collectors.
+      </p>
+      <p>
+        Use <code>/api/v1/evidence/events</code> on the Evidence API to review emitted metadata.
+      </p>
     </div>
-    <div class="event-list" id="eventList"></div>
-    <div class="panel-grid">
-      <div class="panel">
-        <h2>Original</h2>
-        <pre id="originalPanel">Select an event...</pre>
-      </div>
-      <div class="panel">
-        <h2>Raw Event Envelope</h2>
-        <pre id="rawPanel">Select an event...</pre>
-      </div>
-      <div class="panel">
-        <h2>OCSF JSON</h2>
-        <pre id="ocsfPanel">Select an event...</pre>
-      </div>
-      <div class="panel">
-        <h2>Validation + Mapping Report</h2>
-        <pre id="reportPanel">Select an event...</pre>
-      </div>
-    </div>
-    <script>
-      const sourceSelect = document.getElementById("sourceSelect");
-      const eventList = document.getElementById("eventList");
-      const originalPanel = document.getElementById("originalPanel");
-      const rawPanel = document.getElementById("rawPanel");
-      const ocsfPanel = document.getElementById("ocsfPanel");
-      const reportPanel = document.getElementById("reportPanel");
-      const statusLabel = document.getElementById("statusLabel");
-      const limitInput = document.getElementById("limitInput");
-      const refreshButton = document.getElementById("refreshButton");
-      const commitButton = document.getElementById("commitButton");
-      const evidenceApiBase = "http://127.0.0.1:4100";
-      const selectedEventState = {
-        source: null,
-        original: null,
-        rawEnvelope: null,
-        ocsf: null,
-        report: null,
-      };
-
-      function formatJson(value, fallback = "—") {
-        if (value === null || value === undefined) {
-          return fallback;
-        }
-        if (typeof value === "string") {
-          return value;
-        }
-        return JSON.stringify(value, null, 2);
-      }
-
-      function clearPanels(message) {
-        originalPanel.textContent = message;
-        rawPanel.textContent = message;
-        ocsfPanel.textContent = message;
-        reportPanel.textContent = message;
-        selectedEventState.source = null;
-        selectedEventState.original = null;
-        selectedEventState.rawEnvelope = null;
-        selectedEventState.ocsf = null;
-        selectedEventState.report = null;
-        updateCommitButtonState();
-      }
-
-      function updateCommitButtonState() {
-        const evidenceCommit = selectedEventState.report?.evidence_commit;
-        const ready = Boolean(
-          evidenceCommit && selectedEventState.rawEnvelope && selectedEventState.ocsf && selectedEventState.original
-        );
-        commitButton.disabled = !ready;
-      }
-
-      async function loadEvents() {
-        statusLabel.textContent = "Loading…";
-        const source = sourceSelect.value;
-        const limit = limitInput.value || $limit;
-        const response = await fetch(`/api/${source}/tail?limit=${limit}`);
-        if (!response.ok) {
-          statusLabel.textContent = "Failed to load events.";
-          clearPanels("No data.");
-          return;
-        }
-        const data = await response.json();
-        const items = data.items || [];
-        eventList.innerHTML = "";
-        if (!items.length) {
-          statusLabel.textContent = "No events found.";
-          eventList.innerHTML = "<div class=\\"empty-state\\">No events yet. Try refreshing or adjusting the source.</div>";
-          clearPanels("No data.");
-          return;
-        }
-        statusLabel.textContent = "";
-        items.forEach((item) => {
-          const ids = item.ids || {};
-          const recordId = ids.record_id ?? "—";
-          const eventId = ids.event_id ?? "—";
-          const key = ids.dedupe_hash || recordId;
-          const button = document.createElement("button");
-          button.textContent = `Record ${recordId} (EID ${eventId})`;
-          button.dataset.key = key;
-          button.addEventListener("click", () => selectEvent(key));
-          eventList.appendChild(button);
-        });
-        const firstKey = eventList.firstChild?.dataset?.key;
-        if (firstKey) {
-          selectEvent(firstKey);
-        }
-      }
-
-      async function selectEvent(key) {
-        if (!key) {
-          return;
-        }
-        Array.from(eventList.children).forEach((button) => {
-          button.classList.toggle("active", button.dataset.key === key);
-        });
-        const source = sourceSelect.value;
-        const response = await fetch(`/api/pipeline/event?source=${source}&key=${encodeURIComponent(key)}`);
-        if (!response.ok) {
-          const error = await response.json().catch(() => ({}));
-          const message = error.detail || "Failed to load event.";
-          statusLabel.textContent = message;
-          clearPanels(message);
-          return;
-        }
-        const payload = await response.json();
-        originalPanel.textContent = formatJson(payload.original, "Not available.");
-        rawPanel.textContent = formatJson(payload.raw_envelope, "Not available.");
-        if (payload.ocsf) {
-          ocsfPanel.textContent = formatJson(payload.ocsf, "Not available.");
-        } else if (payload.report?.status === "unsupported") {
-          ocsfPanel.textContent = "Not supported yet.";
-        } else if (payload.report?.message) {
-          ocsfPanel.textContent = payload.report.message;
-        } else {
-          ocsfPanel.textContent = "No OCSF output.";
-        }
-        reportPanel.textContent = formatJson(payload.report, "Not available.");
-        selectedEventState.source = payload.source || source;
-        selectedEventState.original = payload.original;
-        selectedEventState.rawEnvelope = payload.raw_envelope;
-        selectedEventState.ocsf = payload.ocsf;
-        selectedEventState.report = payload.report;
-        updateCommitButtonState();
-      }
-
-      async function commitSelectedEvent() {
-        if (commitButton.disabled) {
-          return;
-        }
-        const evidenceCommit = selectedEventState.report?.evidence_commit;
-        if (!evidenceCommit) {
-          alert("evidence_commit is missing for this event.");
-          return;
-        }
-
-        commitButton.disabled = true;
-        const previousStatus = statusLabel.textContent;
-        statusLabel.textContent = "Committing to Fabric…";
-
-        try {
-          const response = await fetch(`${evidenceApiBase}/api/v1/evidence/commit`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              original_xml: typeof selectedEventState.original === "string"
-                ? selectedEventState.original
-                : JSON.stringify(selectedEventState.original),
-              raw_envelope: selectedEventState.rawEnvelope,
-              ocsf_event: selectedEventState.ocsf,
-              evidence_commit: evidenceCommit,
-            }),
-          });
-
-          const payload = await response.json().catch(() => ({}));
-          if (!response.ok) {
-            throw new Error(payload.detail || payload.error || `HTTP ${response.status}`);
-          }
-
-          statusLabel.textContent = "Commit succeeded.";
-          alert(
-            `Committed to Fabric
-Evidence ID: ${payload.evidence_id}
-Fabric TxID: ${payload.fabric_tx_id}
-Status: ${payload.status}`
-          );
-        } catch (error) {
-          statusLabel.textContent = "Commit failed.";
-          alert(`Commit to Fabric failed: ${error.message}`);
-        } finally {
-          updateCommitButtonState();
-          if (!statusLabel.textContent) {
-            statusLabel.textContent = previousStatus;
-          }
-        }
-      }
-
-      refreshButton.addEventListener("click", loadEvents);
-      commitButton.addEventListener("click", commitSelectedEvent);
-      sourceSelect.addEventListener("change", loadEvents);
-      limitInput.addEventListener("change", loadEvents);
-      loadEvents();
-    </script>
   </body>
 </html>
 """
@@ -1241,25 +949,6 @@ def _build_not_implemented_report(raw_event: Dict[str, Any], source: str) -> Dic
         "status": "not_implemented",
         "message": f"OCSF mapping not implemented for source '{source}'.",
     }
-
-
-def _extract_original_payload(raw_event: Dict[str, Any], source: str) -> Any:
-    raw = raw_event.get("raw") or {}
-    if source == "sysmon":
-        return raw.get("xml") or raw.get("data")
-    if source == "security":
-        return raw.get("xml") or raw.get("data")
-    return raw.get("data")
-
-
-def _matches_event_key(raw_event: Dict[str, Any], key: str) -> bool:
-    ids = raw_event.get("ids") or {}
-    if ids.get("dedupe_hash") == key:
-        return True
-    record_id = ids.get("record_id")
-    if record_id is None:
-        return False
-    return str(record_id) == key
 
 
 def _build_source_options(selected_source: str) -> str:
@@ -1833,62 +1522,6 @@ async def sysmon_ocsf_event(record_id: Optional[int] = None, dedupe_hash: Option
     if matched is None:
         raise HTTPException(status_code=404, detail="Raw event not found.")
     return JSONResponse(_build_sysmon_ocsf_payload(matched))
-
-
-@app.get("/api/pipeline/event")
-async def pipeline_event(source: str, key: str):
-    source_key = source.strip().lower()
-    if source_key not in {"sysmon", "security", "elastic"}:
-        raise HTTPException(status_code=400, detail="source must be sysmon, security, or elastic.")
-    if not key:
-        raise HTTPException(status_code=400, detail="key is required.")
-    clean_key = key.strip()
-    if source_key == "sysmon":
-        events = _load_sysmon_raw_events(200)
-    elif source_key == "security":
-        events = _load_security_raw_events(200)
-    else:
-        events = _load_elastic_raw_events(200)
-    matched = None
-    for event in events:
-        if _matches_event_key(event, clean_key):
-            matched = event
-            break
-    if matched is None:
-        raise HTTPException(status_code=404, detail="Raw event not found.")
-    original = _extract_original_payload(matched, source_key)
-    if source_key == "sysmon":
-        payload = _build_sysmon_ocsf_payload(matched)
-        return JSONResponse(
-            {
-                "source": source_key,
-                "original": original,
-                "raw_envelope": matched,
-                "ocsf": payload["ocsf_event"],
-                "report": payload["report"],
-            }
-        )
-    if source_key == "security":
-        payload = _build_security_ocsf_payload(matched)
-        return JSONResponse(
-            {
-                "source": source_key,
-                "original": original,
-                "raw_envelope": matched,
-                "ocsf": payload["ocsf_event"],
-                "report": payload["report"],
-            }
-        )
-    payload = _build_elastic_ocsf_payload(matched)
-    return JSONResponse(
-        {
-            "source": source_key,
-            "original": original,
-            "raw_envelope": matched,
-            "ocsf": payload["ocsf_event"],
-            "report": payload["report"],
-        }
-    )
 
 
 @app.post("/convert/zeek")

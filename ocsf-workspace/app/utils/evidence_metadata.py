@@ -4,26 +4,15 @@ import ipaddress
 import json
 import logging
 import os
-import platform
 import subprocess
 import threading
 import urllib.request
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 
 logger = logging.getLogger(__name__)
 DEFAULT_EVIDENCE_API_URL = "http://127.0.0.1:4100"
 _RESOLVED_EVIDENCE_API_URL: str | None = None
-
-
-def _is_wsl_present() -> bool:
-    if os.getenv("WSL_DISTRO_NAME"):
-        return True
-    try:
-        with open("/proc/version", "r", encoding="utf-8") as handle:
-            return "Microsoft" in handle.read()
-    except FileNotFoundError:
-        return False
 
 
 def _discover_wsl_ip() -> str | None:
@@ -56,32 +45,19 @@ def resolve_evidence_api_url() -> str:
     env_url = os.getenv("EVIDENCE_API_URL")
     if env_url:
         _RESOLVED_EVIDENCE_API_URL = env_url
-        logger.info(
-            "[EVIDENCE-META] using Evidence API URL %s (source: EVIDENCE_API_URL env var)",
-            env_url,
-        )
+        logger.info("[EVIDENCE-META] using Evidence API at %s", env_url)
         return _RESOLVED_EVIDENCE_API_URL
 
-    if platform.system() == "Windows" and _is_wsl_present():
+    if os.name == "nt":
         wsl_ip = _discover_wsl_ip()
         if wsl_ip:
             resolved = f"http://{wsl_ip}:4100"
             _RESOLVED_EVIDENCE_API_URL = resolved
-            logger.info(
-                "[EVIDENCE-META] using Evidence API URL %s (source: WSL IP via wsl.exe hostname -I)",
-                resolved,
-            )
+            logger.info("[EVIDENCE-META] using Evidence API at %s", resolved)
             return _RESOLVED_EVIDENCE_API_URL
-        logger.warning(
-            "[EVIDENCE-META] failed to resolve WSL IP; evidence metadata emission disabled.")
-        _RESOLVED_EVIDENCE_API_URL = ""
-        return _RESOLVED_EVIDENCE_API_URL
 
     _RESOLVED_EVIDENCE_API_URL = DEFAULT_EVIDENCE_API_URL
-    logger.info(
-        "[EVIDENCE-META] using Evidence API URL %s (source: default)",
-        _RESOLVED_EVIDENCE_API_URL,
-    )
+    logger.info("[EVIDENCE-META] using Evidence API at %s", _RESOLVED_EVIDENCE_API_URL)
     return _RESOLVED_EVIDENCE_API_URL
 
 
@@ -94,14 +70,16 @@ def _resolve_events_url(base_url: str) -> str:
     return f"{clean}/api/v1/evidence/events"
 
 
-def _build_metadata(evidence_commit: Dict[str, Any]) -> Dict[str, Any]:
+def _build_metadata(
+    evidence_commit: Dict[str, Any], raw_envelope: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
     source = evidence_commit.get("source") or {}
     timestamps = evidence_commit.get("timestamps") or {}
     ocsf = evidence_commit.get("ocsf") or {}
     raw = evidence_commit.get("raw") or {}
-    linkage = evidence_commit.get("linkage") or {}
-    raw_envelope = raw.get("envelope") or {}
+    raw_envelope_entry = raw.get("envelope") or {}
     raw_payload = raw.get("payload") or {}
+    host = (raw_envelope or {}).get("host") or {}
     return {
         "evidence_id": evidence_commit.get("evidence_id"),
         "source": {
@@ -117,14 +95,13 @@ def _build_metadata(evidence_commit: Dict[str, Any]) -> Dict[str, Any]:
             "class_uid": ocsf.get("class_uid"),
             "type_uid": ocsf.get("type_uid"),
         },
-        "hashes": {
-            "raw_envelope_hash": raw_envelope.get("hash_sha256"),
-            "raw_payload_hash": raw_payload.get("hash_sha256"),
-            "ocsf_hash": ocsf.get("hash_sha256"),
+        "host": {
+            "hostname": host.get("hostname"),
         },
-        "linkage": {
-            "record_id": linkage.get("record_id"),
-            "dedupe_hash": linkage.get("dedupe_hash"),
+        "hashes": {
+            "raw_envelope_sha256": raw_envelope_entry.get("hash_sha256"),
+            "raw_payload_sha256": raw_payload.get("hash_sha256"),
+            "ocsf_sha256": ocsf.get("hash_sha256"),
         },
     }
 
@@ -140,20 +117,21 @@ def _post_metadata_sync(metadata: Dict[str, Any], evidence_api_url: str) -> None
         return None
 
 
-def emit_evidence_metadata(evidence_commit: Dict[str, Any]) -> None:
+def emit_evidence_metadata(
+    evidence_commit: Dict[str, Any], *, raw_envelope: Optional[Dict[str, Any]] = None
+) -> None:
     evidence_api_url = _resolve_events_url(resolve_evidence_api_url())
     if not evidence_api_url:
         return
-    metadata = _build_metadata(evidence_commit)
+    metadata = _build_metadata(evidence_commit, raw_envelope)
     evidence_id = metadata.get("evidence_id") or "unknown"
-    source_type = (metadata.get("source") or {}).get("type") or "unknown"
 
     def _worker() -> None:
         try:
             _post_metadata_sync(metadata, evidence_api_url)
-            logger.info("[EVIDENCE-META] emitted evidence_id=%s source=%s", evidence_id, source_type)
+            logger.info("[EVIDENCE-META] emitted evidence_id=%s", evidence_id)
         except Exception as exc:
-            logger.warning("[EVIDENCE-META] failed emit evidence_id=%s: %s", evidence_id, exc)
+            logger.warning("[EVIDENCE-META] emit failed evidence_id=%s error=%s", evidence_id, exc)
 
     thread = threading.Thread(target=_worker, daemon=True)
     thread.start()
