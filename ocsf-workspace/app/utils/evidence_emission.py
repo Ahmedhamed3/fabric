@@ -5,17 +5,17 @@ import os
 from typing import Any, Callable, Dict, Optional
 
 from app.utils.evidence_hashing import apply_evidence_hashing
-from app.utils.evidence_metadata import emit_evidence_metadata
+from app.utils.evidence_metadata import emit_evidence_metadata, resolve_evidence_api_url
 
 
 logger = logging.getLogger(__name__)
-DEFAULT_EVIDENCE_API_URL = "http://127.0.0.1:4100"
 
 
-def ensure_evidence_api_url(default_url: str = DEFAULT_EVIDENCE_API_URL) -> None:
-    if os.getenv("EVIDENCE_API_URL"):
+def ensure_evidence_api_url() -> None:
+    resolved = resolve_evidence_api_url()
+    if not resolved:
         return
-    os.environ["EVIDENCE_API_URL"] = default_url
+    os.environ["EVIDENCE_API_URL"] = resolved
 
 
 def emit_evidence_metadata_for_event(

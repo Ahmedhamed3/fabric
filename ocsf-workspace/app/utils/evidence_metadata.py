@@ -1,14 +1,88 @@
 from __future__ import annotations
 
+import ipaddress
 import json
 import logging
 import os
+import platform
+import subprocess
 import threading
 import urllib.request
 from typing import Any, Dict
 
 
 logger = logging.getLogger(__name__)
+DEFAULT_EVIDENCE_API_URL = "http://127.0.0.1:4100"
+_RESOLVED_EVIDENCE_API_URL: str | None = None
+
+
+def _is_wsl_present() -> bool:
+    if os.getenv("WSL_DISTRO_NAME"):
+        return True
+    try:
+        with open("/proc/version", "r", encoding="utf-8") as handle:
+            return "Microsoft" in handle.read()
+    except FileNotFoundError:
+        return False
+
+
+def _discover_wsl_ip() -> str | None:
+    try:
+        result = subprocess.run(
+            ["wsl.exe", "hostname", "-I"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except FileNotFoundError:
+        return None
+    if result.returncode != 0:
+        return None
+    for token in result.stdout.split():
+        try:
+            ip = ipaddress.ip_address(token)
+        except ValueError:
+            continue
+        if ip.version == 4:
+            return str(ip)
+    return None
+
+
+def resolve_evidence_api_url() -> str:
+    global _RESOLVED_EVIDENCE_API_URL
+    if _RESOLVED_EVIDENCE_API_URL is not None:
+        return _RESOLVED_EVIDENCE_API_URL
+
+    env_url = os.getenv("EVIDENCE_API_URL")
+    if env_url:
+        _RESOLVED_EVIDENCE_API_URL = env_url
+        logger.info(
+            "[EVIDENCE-META] using Evidence API URL %s (source: EVIDENCE_API_URL env var)",
+            env_url,
+        )
+        return _RESOLVED_EVIDENCE_API_URL
+
+    if platform.system() == "Windows" and _is_wsl_present():
+        wsl_ip = _discover_wsl_ip()
+        if wsl_ip:
+            resolved = f"http://{wsl_ip}:4100"
+            _RESOLVED_EVIDENCE_API_URL = resolved
+            logger.info(
+                "[EVIDENCE-META] using Evidence API URL %s (source: WSL IP via wsl.exe hostname -I)",
+                resolved,
+            )
+            return _RESOLVED_EVIDENCE_API_URL
+        logger.warning(
+            "[EVIDENCE-META] failed to resolve WSL IP; evidence metadata emission disabled.")
+        _RESOLVED_EVIDENCE_API_URL = ""
+        return _RESOLVED_EVIDENCE_API_URL
+
+    _RESOLVED_EVIDENCE_API_URL = DEFAULT_EVIDENCE_API_URL
+    logger.info(
+        "[EVIDENCE-META] using Evidence API URL %s (source: default)",
+        _RESOLVED_EVIDENCE_API_URL,
+    )
+    return _RESOLVED_EVIDENCE_API_URL
 
 
 def _resolve_events_url(base_url: str) -> str:
@@ -67,7 +141,7 @@ def _post_metadata_sync(metadata: Dict[str, Any], evidence_api_url: str) -> None
 
 
 def emit_evidence_metadata(evidence_commit: Dict[str, Any]) -> None:
-    evidence_api_url = _resolve_events_url(os.getenv("EVIDENCE_API_URL", ""))
+    evidence_api_url = _resolve_events_url(resolve_evidence_api_url())
     if not evidence_api_url:
         return
     metadata = _build_metadata(evidence_commit)
