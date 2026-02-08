@@ -53,8 +53,19 @@ start_stack() {
   ensure_deps
   stop_background
 
-  echo "[run.sh] Starting evidence-api on :4100"
-  start_background "evidence-api" "${EVIDENCE_API_DIR}" "npm start"
+  # BEGIN evidence-api
+  local evidence_log_dir="${ROOT_DIR}/logs"
+  mkdir -p "${evidence_log_dir}"
+  if ss -ltn | awk '$4 ~ /:4100$/ {found=1} END {exit !found}'; then
+    echo "[run.sh] evidence-api port 4100 already in use; skipping startup"
+  else
+    echo "[run.sh] Starting evidence-api on :4100"
+    nohup bash -lc "cd '${ROOT_DIR}' && node services/evidence-api/server.js" \
+      >"${evidence_log_dir}/evidence-api.log" 2>&1 &
+    echo $! >"${PID_DIR}/evidence-api.pid"
+    echo "[run.sh] started evidence-api (pid $(cat "${PID_DIR}/evidence-api.pid"))"
+  fi
+  # END evidence-api
 
   echo "[run.sh] Starting ocsf-workspace UI on :8000"
   start_background "ocsf-ui" "${OCSF_DIR}" "python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8000"
