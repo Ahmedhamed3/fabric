@@ -2,9 +2,8 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, List, Optional
 import urllib.parse
 import urllib.request
 
@@ -18,40 +17,10 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 EVIDENCE_EVENTS_PATH = "/api/v1/evidence/events"
-
-
-@dataclass(frozen=True)
-class PipelineArtifactSource:
-    name: str
-    raw_base: Path
-    envelope_base: Path
-    ocsf_base: Path
-    validation_base: Path
-
-
-PIPELINE_SOURCES = [
-    PipelineArtifactSource(
-        name="sysmon",
-        raw_base=Path("out/raw/endpoint/windows_sysmon"),
-        envelope_base=Path("out/envelope/endpoint/windows_sysmon"),
-        ocsf_base=Path("out/ocsf/endpoint/windows_sysmon"),
-        validation_base=Path("out/validation/endpoint/windows_sysmon"),
-    ),
-    PipelineArtifactSource(
-        name="windows-security",
-        raw_base=Path("out/raw/endpoint/windows_security"),
-        envelope_base=Path("out/envelope/endpoint/windows_security"),
-        ocsf_base=Path("out/ocsf/endpoint/windows_security"),
-        validation_base=Path("out/validation/endpoint/windows_security"),
-    ),
-    PipelineArtifactSource(
-        name="elastic",
-        raw_base=Path("out/raw/siem/elastic"),
-        envelope_base=Path("out/envelope/siem/elastic"),
-        ocsf_base=Path("out/ocsf/siem/elastic"),
-        validation_base=Path("out/validation/siem/elastic"),
-    ),
-]
+ARTIFACT_RAW_BASE = Path("out/raw")
+ARTIFACT_ENVELOPE_BASE = Path("out/envelope")
+ARTIFACT_OCSF_BASE = Path("out/ocsf")
+ARTIFACT_VALIDATION_BASE = Path("out/validation")
 
 
 @router.get("/api/pipeline/viewer/metadata")
@@ -97,14 +66,13 @@ def pipeline_viewer_lookup(evidence_id: str) -> JSONResponse:
     if not evidence_id:
         raise HTTPException(status_code=400, detail="evidence_id is required")
 
-    raw_event = _scan_artifacts(_raw_dirs(), evidence_id)
-    envelope_event = _scan_artifacts(_envelope_dirs(), evidence_id)
-    ocsf_event = _scan_artifacts(_ocsf_dirs(), evidence_id)
-    validation_event = _scan_artifacts(_validation_dirs(), evidence_id)
+    raw_event = _read_artifact(ARTIFACT_RAW_BASE, evidence_id)
+    envelope_event = _read_artifact(ARTIFACT_ENVELOPE_BASE, evidence_id)
+    ocsf_event = _read_artifact(ARTIFACT_OCSF_BASE, evidence_id)
+    validation_event = _read_artifact(ARTIFACT_VALIDATION_BASE, evidence_id)
 
     return JSONResponse(
         {
-            "evidence_id": evidence_id,
             "raw": raw_event,
             "envelope": envelope_event,
             "ocsf": ocsf_event,
@@ -132,75 +100,15 @@ def _coerce_events(payload: Any) -> List[Dict[str, Any]]:
     return []
 
 
-def _raw_dirs() -> List[Path]:
-    return [source.raw_base for source in PIPELINE_SOURCES]
-
-
-def _envelope_dirs() -> List[Path]:
-    return [source.envelope_base for source in PIPELINE_SOURCES]
-
-
-def _ocsf_dirs() -> List[Path]:
-    return [source.ocsf_base for source in PIPELINE_SOURCES]
-
-
-def _validation_dirs() -> List[Path]:
-    return [source.validation_base for source in PIPELINE_SOURCES]
-
-
-def _scan_artifacts(directories: Iterable[Path], evidence_id: str) -> Optional[Dict[str, Any]]:
-    normalized = str(evidence_id)
-    found = None
-    for base_dir in directories:
-        for path in _list_ndjson_paths(base_dir):
-            for event in _read_ndjson(path):
-                extracted = _extract_evidence_id(event)
-                if extracted is None:
-                    continue
-                if str(extracted) == normalized:
-                    found = event
-    return found
-
-
-def _list_ndjson_paths(base_dir: Path) -> List[Path]:
-    if not base_dir.exists():
-        return []
-    candidates = list(base_dir.rglob("*.ndjson"))
-    return sorted(candidates, key=lambda path: (path.stat().st_mtime, str(path)))
-
-
-def _read_ndjson(path: Path) -> Iterable[Dict[str, Any]]:
-    with path.open("r", encoding="utf-8") as handle:
-        for line in handle:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                payload = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(payload, dict):
-                yield payload
-
-
-def _extract_evidence_id(event: Dict[str, Any]) -> Optional[str]:
-    if not isinstance(event, dict):
+def _read_artifact(base_dir: Path, evidence_id: str) -> Optional[Dict[str, Any]]:
+    path = base_dir / f"{evidence_id}.json"
+    if not path.exists():
         return None
-    direct = event.get("evidence_id")
-    if direct:
-        return str(direct)
-    ids = event.get("ids") or {}
-    if ids.get("evidence_id"):
-        return str(ids.get("evidence_id"))
-    forensics = event.get("forensics") or {}
-    if forensics.get("evidence_id"):
-        return str(forensics.get("evidence_id"))
-    evidence_commit = event.get("evidence_commit") or {}
-    if evidence_commit.get("evidence_id"):
-        return str(evidence_commit.get("evidence_id"))
-    raw = event.get("raw") or {}
-    if isinstance(raw, dict):
-        raw_ids = raw.get("ids") or {}
-        if raw_ids.get("evidence_id"):
-            return str(raw_ids.get("evidence_id"))
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except (OSError, json.JSONDecodeError):
+        return None
+    if isinstance(payload, dict):
+        return payload
     return None
