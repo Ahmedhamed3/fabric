@@ -5,6 +5,7 @@ from pathlib import Path
 
 from app.normalizers.sysmon_to_ocsf.io_ndjson import convert_events, read_raw_events, write_ndjson
 from app.normalizers.sysmon_to_ocsf.validator import OcsfSchemaLoader
+from app.utils.debug_artifacts import debug_artifacts_enabled, mirror_path
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
@@ -36,6 +37,11 @@ def main(argv: list[str] | None = None) -> None:
         reports.append(report)
     write_ndjson(output_path, outputs)
     write_ndjson(report_path, reports)
+    if debug_artifacts_enabled():
+        validation_reports = [report for report in reports if report.get("validation_ran")]
+        if validation_reports:
+            validation_path = mirror_path(report_path, "out/ocsf", "out/validation")
+            write_ndjson(validation_path, validation_reports)
 
 
 if __name__ == "__main__":

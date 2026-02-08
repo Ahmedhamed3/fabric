@@ -15,12 +15,21 @@ INDEX_PATH = STATIC_DIR / "index.html"
 
 
 class PipelineSource:
-    def __init__(self, name: str, key: str, raw_base: str, envelope_base: str, ocsf_base: str) -> None:
+    def __init__(
+        self,
+        name: str,
+        key: str,
+        raw_base: str,
+        envelope_base: str,
+        ocsf_base: str,
+        validation_base: str,
+    ) -> None:
         self.name = name
         self.key = key
         self.raw_base = Path(raw_base)
         self.envelope_base = Path(envelope_base)
         self.ocsf_base = Path(ocsf_base)
+        self.validation_base = Path(validation_base)
 
 
 PIPELINE_SOURCES = [
@@ -30,6 +39,7 @@ PIPELINE_SOURCES = [
         raw_base="out/raw/endpoint/windows_sysmon",
         envelope_base="out/envelope/endpoint/windows_sysmon",
         ocsf_base="out/ocsf/endpoint/windows_sysmon",
+        validation_base="out/validation/endpoint/windows_sysmon",
     ),
     PipelineSource(
         name="windows-security",
@@ -37,6 +47,7 @@ PIPELINE_SOURCES = [
         raw_base="out/raw/endpoint/windows_security",
         envelope_base="out/envelope/endpoint/windows_security",
         ocsf_base="out/ocsf/endpoint/windows_security",
+        validation_base="out/validation/endpoint/windows_security",
     ),
     PipelineSource(
         name="elastic",
@@ -44,6 +55,7 @@ PIPELINE_SOURCES = [
         raw_base="out/raw/siem/elastic",
         envelope_base="out/envelope/siem/elastic",
         ocsf_base="out/ocsf/siem/elastic",
+        validation_base="out/validation/siem/elastic",
     ),
 ]
 
@@ -84,7 +96,7 @@ def pipeline_events(limit: int = 50) -> JSONResponse:
             "class_uid": (ocsf_event or {}).get("class_uid"),
             "type_uid": (ocsf_event or {}).get("type_uid"),
             "validation_status": (report or {}).get("status"),
-            "raw": entry["raw"],
+            "raw": _raw_payload(entry["raw_event"]),
             "envelope": envelope_event,
             "ocsf": ocsf_event,
             "validation": report,
@@ -154,7 +166,7 @@ def _resolve_output_paths(
     except ValueError:
         return None, None
     ocsf_path = source.ocsf_base / relative
-    report_path = ocsf_path.with_suffix(".report.ndjson")
+    report_path = (source.validation_base / relative).with_suffix(".report.ndjson")
     return (ocsf_path if ocsf_path.exists() else None, report_path if report_path.exists() else None)
 
 
@@ -214,9 +226,6 @@ def _resolve_stage_outputs(
             report_index = _index_by_key(reports, source, record_lookup=True)
             report_cache[report_path] = report_index
         report = _lookup_by_keys(report_index, lookup_keys)
-
-    if ocsf_event is None:
-        report = None
 
     return envelope_event, ocsf_event, report
 
@@ -316,6 +325,13 @@ def _extract_event_time(raw_event: Dict[str, Any]) -> Optional[str]:
 
 def _format_event_time(raw_event: Dict[str, Any]) -> Optional[str]:
     return _extract_event_time(raw_event)
+
+
+def _raw_payload(raw_event: Dict[str, Any] | Any) -> Any:
+    if not isinstance(raw_event, dict):
+        return raw_event
+    payload = raw_event.get("raw")
+    return payload if payload is not None else raw_event
 
 
 def _index_ocsf_events(

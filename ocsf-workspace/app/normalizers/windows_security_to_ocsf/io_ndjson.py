@@ -38,11 +38,13 @@ def convert_events(
         supported = attempted
         missing_fields = missing_required_fields(raw_event)
         validation_errors: List[str] = []
+        validation_ran = False
         evidence_commit = None
         if supported and ocsf_event is not None:
             class_path = class_path_for_event(ocsf_event)
             if class_path:
                 result = schema_loader.validate_event(ocsf_event, class_path)
+                validation_ran = True
                 validation_errors = result.errors
                 if strict and not result.valid:
                     ocsf_event = None
@@ -67,6 +69,7 @@ def convert_events(
             mapping_attempted=attempted,
             missing_fields=missing_fields,
         )
+        report["validation_ran"] = validation_ran
         if evidence_commit is not None:
             report["evidence_commit"] = evidence_commit
         yield ocsf_event, report

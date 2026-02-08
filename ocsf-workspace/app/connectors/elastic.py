@@ -18,6 +18,7 @@ from typing import Any, Iterable
 from app.normalizers.elastic_to_ocsf.io_ndjson import class_path_for_event
 from app.normalizers.elastic_to_ocsf.mapper import MappingContext, map_raw_event
 from app.utils.checkpoint import ElasticCheckpoint, load_elastic_checkpoint, save_elastic_checkpoint
+from app.utils.debug_artifacts import debug_artifacts_enabled
 from app.utils.evidence_emission import emit_evidence_metadata_for_event, ensure_evidence_api_url
 from app.utils.http_status import HttpStatusServer, tail_ndjson
 from app.utils.ndjson_writer import append_ndjson
@@ -101,6 +102,7 @@ class ElasticConnector:
         self.hostname = socket.gethostname()
         self.timezone_name = local_timezone_name()
         self.tail_buffer: deque[dict] = deque(maxlen=tail_size)
+        self._debug_envelope_enabled = debug_artifacts_enabled()
 
     def run_forever(self, poll_seconds: int, max_events: int, http_port: int | None) -> None:
         ensure_evidence_api_url()
@@ -313,6 +315,7 @@ class ElasticConnector:
 
     def _write_records(self, records: Iterable[dict]) -> int:
         grouped: dict[Path, list[dict]] = defaultdict(list)
+        envelope_grouped: dict[Path, list[dict]] = defaultdict(list)
         for record in records:
             event_time = (
                 record.get("event", {})
@@ -331,9 +334,16 @@ class ElasticConnector:
                 BASE_OUTPUT_DIR, str(index), when
             )
             grouped[output_path].append(record)
+            if self._debug_envelope_enabled:
+                envelope_path = build_elastic_output_path(
+                    "out/envelope/siem/elastic", str(index), when
+                )
+                envelope_grouped[envelope_path].append(record)
         written = 0
         for path, batch in grouped.items():
             written += append_ndjson(path, batch)
+        for path, batch in envelope_grouped.items():
+            append_ndjson(path, batch)
         return written
 
     def _emit_evidence_metadata(self, raw_event: dict) -> None:
