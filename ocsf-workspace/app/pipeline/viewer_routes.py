@@ -28,10 +28,12 @@ def pipeline_viewer_metadata(limit: int = 50) -> JSONResponse:
     safe_limit = max(1, min(limit, 200))
     base_url = resolve_evidence_api_url()
     events_url = _resolve_events_url(base_url)
+
     if not events_url:
         return JSONResponse({"events": [], "message": "Evidence API URL is not configured."})
 
     url = f"{events_url}?{urllib.parse.urlencode({'limit': safe_limit})}"
+
     try:
         with urllib.request.urlopen(url, timeout=10) as response:
             payload = json.loads(response.read().decode("utf-8"))
@@ -45,12 +47,17 @@ def pipeline_viewer_metadata(limit: int = 50) -> JSONResponse:
             }
         )
 
-    events = _coerce_events(payload)
+    # 🔴 FIX: Evidence API returns metadata under "items"
+    raw_items = payload.get("items", []) if isinstance(payload, dict) else []
+    events = _coerce_events(raw_items)
+
     message = None
     if isinstance(payload, dict):
         message = payload.get("message")
+
     if not message and not events:
         message = "No evidence metadata found. Ensure the pipeline emitted events."
+
     return JSONResponse(
         {
             "events": events,
@@ -90,14 +97,14 @@ def _resolve_events_url(base_url: str) -> str:
     return f"{clean}{EVIDENCE_EVENTS_PATH}"
 
 
-def _coerce_events(payload: Any) -> List[Dict[str, Any]]:
-    if isinstance(payload, list):
-        return [event for event in payload if isinstance(event, dict)]
-    if isinstance(payload, dict):
-        events = payload.get("events")
-        if isinstance(events, list):
-            return [event for event in events if isinstance(event, dict)]
-    return []
+def _coerce_events(items: Any) -> List[Dict[str, Any]]:
+    """
+    Accepts Evidence API 'items' and returns UI-safe event dicts.
+    No filtering. No validation. No inference.
+    """
+    if not isinstance(items, list):
+        return []
+    return [event for event in items if isinstance(event, dict)]
 
 
 def _read_artifact(base_dir: Path, evidence_id: str) -> Optional[Dict[str, Any]]:
