@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Pipeline Verification</title>
+    <link rel="stylesheet" href="/static/pipeline-ui/styles.css" />
+  </head>
+  <body>
+    <header class="page-header">
+      <div>
+        <h1>Pipeline Verification</h1>
+        <p>Inspect raw payloads, envelopes, OCSF output, and validation reports from the live pipeline.</p>
+      </div>
+      <div class="controls">
+        <label>
+          Event limit
+          <input id="limitInput" type="number" min="1" max="200" value="50" />
+        </label>
+        <button id="loadButton" type="button">Load</button>
+      </div>
+    </header>
+
+    <section class="navigator">
+      <div class="navigator-header">
+        <div class="nav-actions">
+          <button id="prevButton" type="button">Previous</button>
+          <button id="nextButton" type="button">Next</button>
+        </div>
+        <span id="statusLabel" class="status-label"></span>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Time</th>
+              <th>Source</th>
+              <th>Record ID</th>
+              <th>Class UID / Type UID</th>
+              <th>Validation status</th>
+            </tr>
+          </thead>
+          <tbody id="eventTableBody"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel-grid">
+      <article class="panel">
+        <header>
+          <h2>Raw Event</h2>
+          <span>Raw payload only</span>
+        </header>
+        <pre id="rawEventPanel">Select an event to view payload.</pre>
+      </article>
+      <article class="panel">
+        <header>
+          <h2>Raw Event Envelope</h2>
+          <span>Existing envelope (no recompute)</span>
+        </header>
+        <pre id="rawEnvelopePanel">Select an event to view envelope.</pre>
+      </article>
+      <article class="panel">
+        <header>
+          <h2>OCSF JSON</h2>
+          <span>Normalized output</span>
+        </header>
+        <pre id="ocsfPanel">Select an event to view OCSF.</pre>
+      </article>
+      <article class="panel">
+        <header>
+          <h2>Validation Report</h2>
+          <span>Schema validation results</span>
+        </header>
+        <pre id="validationPanel">Select an event to view validation.</pre>
+      </article>
+    </section>
+
+    <script src="/static/pipeline-ui/pipeline.js"></script>
+  </body>
+</html>
